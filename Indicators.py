@@ -1,19 +1,42 @@
 import numpy as np
 from SignalTransformation import *
+from abc import ABC, abstractmethod
 
 
-class MA:
+class Indicator(ABC):
+
+    @abstractmethod
+    def __call__(self, price):
+        pass
+
+    @abstractmethod
+    def initialize(self):
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def get_full(prices, period):
+        pass
+
+
+class SMA(Indicator):
 
     def __init__(self, period, price):
+        Indicator.__init__(self)
+        self.lookback = period
         self.period = period
         self.values = [price for _ in range(period)]
+
+    def initialize(self):
+        pass
 
     def __call__(self, price):
         self.values = self.values[1:] + [price]
         return np.average(self.values)
 
-    def get_full(self, prices):
-        return np.convolve(prices, np.repeat(1.0, self.period) / self.period, 'valid')
+    @staticmethod
+    def get_full(prices, period):
+        return np.convolve(prices, np.repeat(1.0, period) / period, 'valid')
 
 
 class Lowpass:
@@ -27,7 +50,6 @@ class Lowpass:
         self.values = []
 
     def __call__(self):
-
         for v in self.values:
             yield v
 

@@ -10,7 +10,7 @@ def my_sosfilt(t, input_signal, cutoff_frequency, order=10, sampling_frequency=1
         if FREQUENCY_SCALING(f) > FREQUENCY_SCALING(sampling_frequency / 2):
             print("cutoff frequency must be < fs/2, fs={}, fs/2={}".
                   format(FREQUENCY_SCALING(cutoff_frequency), FREQUENCY_SCALING(sampling_frequency / 2)))
-    sos = butter(order, [FREQUENCY_SCALING(f) for f in cutoff_frequency], t, fs=sampling_frequency, output="sos")
+    sos = butter(order, [FREQUENCY_SCALING(f) for f in cutoff_frequency], t, output="sos")
     y, _ = sosfilt(sos, input_signal, zi=sosfilt_zi(sos) * input_signal[0])
     return y
 

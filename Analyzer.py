@@ -35,8 +35,8 @@ class Trend:
 
         self.momentum = self.height/self.len
 
-        self.derivate1 = [0] + Analyzer.derive(self.prices)
-        self.derivate2 = [0] + Analyzer.derive(self.derivate1)
+        self.derivate1 =  Analyzer.derive_same_len(self.prices)
+        self.derivate2 =  Analyzer.derive_same_len(self.derivate1)
 
     def print_prices(self):
         for d in self.data:
@@ -438,8 +438,11 @@ class Analyzer:
         return long_wins, long_losses, short_wins, short_losses, long_wins + long_losses + short_wins + short_losses
 
     @staticmethod
-    def derive(seq):
-        return [seq[i+1]-seq[i] for i in range(len(seq)-1)]
+    def derive_same_len(seq, times=1):
+        if times <= 1:
+            return [0] + [seq[i+1]-seq[i] for i in range(len(seq)-1)]
+        else:
+            return Analyzer.derive_same_len([0] + [seq[i+1]-seq[i] for i in range(len(seq)-1)], times-1)
 
     # <editor-fold desc="Probability getter">
     def GTEP_len(self, curr_len, max_len=500):
@@ -822,6 +825,11 @@ class Plotter:
                 print("y dimensions must be all equal but have lengths: ", [len(y) for y in ys])
                 return
 
+        plt.rc('figure', facecolor="#333333", edgecolor="#333333")
+        plt.rc('axes', facecolor="#353535", edgecolor="#000000")
+        plt.rc('lines', color="#393939")
+        plt.rc('grid', color="#121212")
+
         fig, ax1 = plt.subplots()
 
         ax1.plot(x, ys[0])
@@ -829,23 +837,23 @@ class Plotter:
         ax1.set_xlabel(x_label, color="tab:red")
         ax1.set_ylabel(y_labels[0])
 
-        ax1.tick_params(axis="y")
+        #ax1.tick_params(axis="y")
         plt.xticks(rotation=90)
 
         cmap = {
-            1: "red",
-            2: "blue",
-            3: "green",
-            4: "yellow",
-            5: "purple"
+            1: "blue",
+            2: "purple",
+            3: "red",
+            4: "orange",
+            5: "yellow",
+            6: "green",
         }
 
+        ax2 = ax1.twinx()
         for y in range(1, len(ys[1:])+1):
-            print(y)
-            ax2 = ax1.twinx()
             ax2.set_ylabel(y_labels[y], color="tab:" + cmap[y])
             ax2.plot(x, ys[y], color=cmap[y])
-            ax2.tick_params(axis="y")
+            #ax2.tick_params(axis="y")
 
         plt.grid(True)
         plt.xticks(rotation=90)
@@ -1334,7 +1342,6 @@ class Backtester:
         self.max_balance = self.base_balance
         margin_call = False
 
-        self.strat.init_indicators(self.hist_obj.prices, self.hist_obj.times)
         self.strat.initrun(self.hist_obj.hist[:lookback+1])
 
         if p:

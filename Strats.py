@@ -210,9 +210,6 @@ class TrendFollowStrat(Strategy):
         self.name = "TrendFollowStrat"
         self.parameter_names = ["threshold"]  # everything that can be used to init the strat
 
-    def init_indicators(self, prices, times):
-        pass
-
     def initrun(self, data):
 
         """
@@ -290,7 +287,7 @@ class TrendFollowStrat(Strategy):
 class FilteredTrendFollowStrat(Strategy):
 
     def __init__(self, threshold, filter_class, *filter_args):
-        super().__init__(lookback=1)  # must be >= length of test period quotes
+        super().__init__(lookback=100000000)  # must be >= length of test period quotes
         self.uptrend = -1
         self.high = self.low = self.begin = 0
         self.high_index = self.low_index = self.break_index = 0
@@ -306,10 +303,6 @@ class FilteredTrendFollowStrat(Strategy):
         self.filter = filter_class(*filter_args)
         self.filter_values = []
 
-    def init_indicators(self, prices, times):
-        self.filter.initialize(prices)
-        self.iterator = self.filter()
-
     def initrun(self, data):
 
         """
@@ -320,13 +313,14 @@ class FilteredTrendFollowStrat(Strategy):
         :param data: first price quotes
         """
 
-        self.high = self.low = self.begin = next(self.iterator)
+        self.filter.initialize([d["price"] for d in data])
+        self.high = self.low = self.begin = self.filter()
 
     def run(self, data):
 
         self.hist.append(data[0])
         i = len(self.hist) - 1
-        last_filtered = next(self.iterator)
+        last_filtered = self.filter()
         last_price = data[0]["price"]
 
         actions = []

@@ -8,7 +8,7 @@ from Indicators import *
 
 def func():
 
-    dax_hist = History("GER30", 2017)
+    dax_hist = History("GER30", 2018)
     #lp = Lowpass(10)
     #lp.initialize(dax_hist.prices)
     #filtered_slow = lp.values
@@ -26,17 +26,27 @@ def func():
                                     x_label="Trends", y_labels=["heights", "lens"])
 
     def backtest():
-        t = Trader.DEFAULT
-        trend_follow = strat_dict["filtered trend follow"](40, Lowpass, 40) #82
+        t = Trader.HALF_RISK
+        trend_follow = strat_dict["trend follow"](82) #82
 
         bt2 = Backtester(trend_follow, dax_hist, use_balance=True, asset_data=AssetData.GER30,
-                         trader_data=t)#, ts_in_pips=45, sl_in_pips=45)
+                         trader_data=t, ts_in_pips=45, sl_in_pips=45)
 
         bt2.test(use_sl_for_risk=False, full_print=True)
         # bt2.profit_with_tax(2016, 2020, sl_for_risk=False)
 
-    backtest()
-    #Plotter.plot_general_same_y(list(range(len(filtered_slow))), [filtered_slow, dax_hist.prices], y_labels=["filtered prices", "raw prices"])
+    #backtest()
+
+    prices = dax_hist.prices
+    derivative = Analyzer.derive_same_len(dax_hist.prices)
+    ma = SMA.get_full(derivative, 12)
+
+    Plotter.plot_general_multi_y(x=list(range(len(dax_hist.prices)))[11:],
+                                 ys=[prices[11:], derivative[11:], ma],
+                                 y_labels=["prices",
+                                           "derivative",
+                                           "MA derivative"])
+    #lo,
 
 
 func()
