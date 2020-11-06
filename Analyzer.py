@@ -2,8 +2,8 @@ from scipy.interpolate import interp2d
 from scipy.signal import *
 import matplotlib.pyplot as plt
 from matplotlib import cm
-import datetime
 import numpy as np
+import datetime
 import statistics
 from History import AssetData, Trader, History
 from scipy import *
@@ -611,6 +611,51 @@ class Analyzer:
 
 class Plotter:
 
+    class SnappingCursor:
+        """
+        A cross hair cursor that snaps to the data point of a line, which is
+        closest to the *x* position of the cursor.
+
+        For simplicity, this assumes that *x* values of the data are sorted.
+        """
+
+        def __init__(self, ax, line):
+            self.ax = ax
+            self.horizontal_line = ax.axhline(color='k', lw=0.8, ls='--')
+            self.vertical_line = ax.axvline(color='k', lw=0.8, ls='--')
+            self.x, self.y = line.get_data()
+            self._last_index = None
+            # text location in axes coords
+            self.text = ax.text(0.72, 0.9, '', transform=ax.transAxes)
+
+        def set_cross_hair_visible(self, visible):
+            need_redraw = self.horizontal_line.get_visible() != visible
+            self.horizontal_line.set_visible(visible)
+            self.vertical_line.set_visible(visible)
+            self.text.set_visible(visible)
+            return need_redraw
+
+        def on_mouse_move(self, event):
+            if not event.inaxes:
+                self._last_index = None
+                need_redraw = self.set_cross_hair_visible(False)
+                if need_redraw:
+                    self.ax.figure.canvas.draw()
+            else:
+                self.set_cross_hair_visible(True)
+                x, y = event.xdata, event.ydata
+                index = min(np.searchsorted(self.x, x), len(self.x) - 1)
+                if index == self._last_index:
+                    return  # still on the same data point. Nothing to do.
+                self._last_index = index
+                x = self.x[index]
+                y = self.y[index]
+                # update the line positions
+                self.horizontal_line.set_ydata(y)
+                self.vertical_line.set_xdata(x)
+                self.text.set_text('x=%1.2f, y=%1.2f' % (x, y))
+                self.ax.figure.canvas.draw()
+
     def __init__(self, analyzer):
         self.analyzer = analyzer
         plt.rc('figure', facecolor="#333333", edgecolor="#333333")
@@ -785,7 +830,7 @@ class Plotter:
         plt.show()
 
     @staticmethod
-    def plot_general_same_y(x, ys, x_label="X", y_labels=["Y"]):
+    def plot_general_same_y(x, ys, x_label="X", y_labels=["Y"], crosshair=False):
 
         plt.rc('figure', facecolor="#333333", edgecolor="#333333")
         plt.rc('axes', facecolor="#353535", edgecolor="#000000")
@@ -802,9 +847,13 @@ class Plotter:
                 return
 
         fig, ax1 = plt.subplots()
+        line = None
 
         for y in range(0, len(ys[1:])+1):
-            ax1.plot(x, ys[y], label=y_labels[y])
+            if y == 0:
+                line, = ax1.plot(x, ys[y], label=y_labels[y])
+            else:
+                ax1.plot(x, ys[y], label=y_labels[y])
 
         ax1.set_xlabel(x_label)
         ax1.tick_params(axis="y")
@@ -812,6 +861,11 @@ class Plotter:
         plt.legend()
         plt.grid(True)
         plt.tight_layout()
+
+        if crosshair:
+            snap_cursor = Plotter.SnappingCursor(ax1, line)
+            fig.canvas.mpl_connect('motion_notify_event', snap_cursor.on_mouse_move)
+
         plt.show()
 
     @staticmethod

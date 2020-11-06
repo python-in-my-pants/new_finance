@@ -181,7 +181,6 @@ class MarketOpenSpike(Strategy):
         pass
 
     def run(self, data):
-
         price = data[0]["price"]
         time = data[0]["time"]
 
@@ -379,8 +378,68 @@ class FilteredTrendFollowStrat(Strategy):
         # </editor-fold>
 
 
+class IndicatorSignalStrat(Strategy):
+
+    def __init__(self, entry_signal_long, exit_signal_long, entry_signal_short, exit_signal_short):
+
+        self.lookback = max(entry_signal_long.lookback, exit_signal_long.lookback,
+                            entry_signal_short.lookback, exit_signal_short.lookback)
+        super().__init__(self.lookback)
+
+        self.name = "IndicatorSignalStrat"
+
+        self.entry_signal_long = entry_signal_long
+        self.exit_signal_long = exit_signal_long
+
+        self.entry_signal_short = entry_signal_short
+        self.exit_signal_short = exit_signal_short
+
+    def run(self, data):
+        """
+        :param data: n (price, time) pairs where n is lookback+1?
+        :return: list of actions to do, action is [action_type, price, time]
+        """
+        actions = []
+
+        price = data[0]["price"]
+        time = data[0]["time"]
+
+        prices = [d["price"] for d in data]
+
+        enter_long, enter_long_value = self.entry_signal_long(prices)
+        exit_long, exit_long_value = self.exit_signal_long(prices)
+
+        enter_short, enter_short_value = self.entry_signal_short(prices)
+        exit_short, exit_short_value = self.exit_signal_short(prices)
+
+        if enter_long and not exit_long:
+            actions.append(["enterLong", price, time, ()])
+        if exit_long:
+            actions.append(["exitLong", price, time, ()])
+        if enter_short and not exit_short:
+            actions.append(["enterShort", price, time, ()])
+        if exit_short:
+            actions.append(["exitShort", price, time, ()])
+
+        return actions
+
+    def initrun(self, data):
+        """
+        should be executed only once -> after first batch of data comes in, e.g. to init certain params
+
+        :param data:
+        :return:
+        """
+        prices = [d["price"] for d in data]
+        self.entry_signal_long.initialize(prices)
+        self.exit_signal_long.initialize(prices)
+        self.entry_signal_short.initialize(prices)
+        self.exit_signal_short.initialize(prices)
+
+
 strat_dict = {"trend follow": TrendFollowStrat,
               "trend follow prob": TrendFollowStratWithProbModell,
               "market open spike": MarketOpenSpike,
               "filtered trend follow": FilteredTrendFollowStrat,
+              "indicator signal": IndicatorSignalStrat,
               }
