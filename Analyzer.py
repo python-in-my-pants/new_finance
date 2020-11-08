@@ -7,6 +7,7 @@ import datetime
 import statistics
 from History import AssetData, Trader, History
 from scipy import *
+import statsmodels.api as sm
 
 
 class Trend:
@@ -352,10 +353,11 @@ class Analyzer:
                                     x_label="Trend #",
                                     y_labels=["Lengths", "Heights", "Cross correlation"])
 
-    def autocorrelate(self, data):
+    def autocorrelate_old(self, data):
         data_dict = {
             "trend len": [trend.len for trend in self.trend_list],
-            "trend height": [trend.height for trend in self.trend_list]
+            "trend height": [trend.height for trend in self.trend_list],
+            "trend abs mom": [abs(trend.momentum) for trend in self.trend_list],
         }
 
         if data in list(data_dict.keys()):
@@ -372,6 +374,7 @@ class Analyzer:
             autocorrelated[int(np.rint(autocorrelated.size/2)-1):] / np.var(autocorrelated)
 
         Plotter.plot_general(list(range(len(signal))), autocorrelated_norm)
+        #Plotter.plot_general(list(range(len(autocorrelated))), autocorrelated)
 
     def get_win_loss_rythm(self, p=True):
 
@@ -913,6 +916,15 @@ class Plotter:
         plt.xticks(rotation=90)
 
         plt.tight_layout()
+        plt.show()
+
+    @staticmethod
+    def sm_autocor(data):
+        plt.rc('figure', facecolor="#333333", edgecolor="#333333")
+        plt.rc('axes', facecolor="#353535", edgecolor="#000000")
+        plt.rc('lines', color="#393939")
+        plt.rc('grid', color="#121212")
+        sm.graphics.tsa.plot_acf(data, zero=False)
         plt.show()
 
     def scatter_trends(self):

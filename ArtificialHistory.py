@@ -11,7 +11,9 @@ class ArtificialHistory:
         self.real_hist = real_hist
 
         # use spread as min_threshold
-        self.anal = Analyzer(self.real_hist, min_trend_h=vars(AssetData)[self.real_hist.asset_name][0]*9, realistic=True)
+        self.anal = Analyzer(self.real_hist,
+                             min_trend_h=vars(AssetData)[self.real_hist.asset_name][0]*9,
+                             realistic=True)
 
         self.asset_name = self.real_hist.asset_name
         self.timeframe = self.real_hist.timeframe

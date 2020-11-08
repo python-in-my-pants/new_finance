@@ -5,21 +5,34 @@ from ArtificialHistory import *
 from Indicators import *
 from TradeSignal import *
 from Triggers import *
+import numpy as np
 
 
 def func():
-    dax_hist = History("GER30", 2016)
+
+    dax_hist = History("GER30", 2017, use_cached=True)
+
+    def autocor_trend_mom():
+
+        anal16 = Analyzer(dax_hist, min_trend_h=82, realistic=False)
+
+        moms = np.asarray([abs(trend.momentum) for trend in anal16.trend_list])
+
+        Plotter.sm_autocor(moms)
 
     def anal_trends():
-        anal16 = Analyzer(dax_hist, realistic=True, min_trend_h=40)
+        anal16 = Analyzer(dax_hist)
         plotter = Plotter(anal16)
 
-        trends = anal16.get_trends(anal16.hist, min_trend_h=82, realistic=False)
-        trend_heights = [x.height for x in trends]
-        trend_len = [x.len for x in trends]
+        trends = anal16.get_trends(anal16.hist, min_trend_h=10, realistic=False)
+        trend_heights = [abs(x.height) for x in trends]
+        trend_len = [abs(x.len) for x in trends]
+        mom = [abs(x.height/x.len)*10 for x in trends]
 
-        plotter.plot_general_same_y(list(range(len(trends))), [trend_heights, trend_len],
-                                    x_label="Trends", y_labels=["heights", "lens"])
+        plotter.plot_general_same_y(list(range(len(trends))),
+                                    [trend_heights, trend_len, mom],
+                                    x_label="Trends",
+                                    y_labels=["heights", "lens", "momentum"])
 
     def backtest():
         t = Trader.HALF_RISK
@@ -77,11 +90,12 @@ def func():
 
         signal_strat = strat_dict["indicator signal"](in_long, out_long, in_short, out_short)
 
-        bt2 = Backtester(signal_strat, dax_hist, use_balance=True, asset_data=AssetData.GER30, trader_data=trader)
+        bt2 = Backtester(signal_strat, dax_hist, use_balance=True,
+                         asset_data=AssetData.GER30, trader_data=trader)
 
         bt2.test(use_sl_for_risk=False, full_print=True)
 
-    test_singal_strat()
+    autocor_trend_mom()
 
 
 func()

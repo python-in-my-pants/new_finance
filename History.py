@@ -3,8 +3,19 @@ from ctypes import *
 import json
 from datetime import datetime, timedelta
 import pandas as pd
+import pickle
+import os
+import time
 
 # ZORRO_T6_FILE_TO_READ = 'History/GER30_2019.t6'
+
+
+def timeit(func):
+    def inner(*args, **kwargs):
+        start = time.time()
+        func(*args, **kwargs)
+        print("{} took {}".format(func.__name__, time.time()-start))
+    return inner
 
 
 class AssetData:
@@ -77,7 +88,8 @@ class Tick:
 
 class History:
 
-    def __init__(self, asset_name, start, end=None, accuracy="M1"):
+    @timeit
+    def __init__(self, asset_name, start, end=None, accuracy="M1", use_cached=True):
 
         if not end:
             end = start
@@ -86,18 +98,42 @@ class History:
         self.accuracy = accuracy
 
         folder_name = "History/" + asset_name + "/" + accuracy + "/"
-        file_name = asset_name + "_" + str(start) + "_" + str(end) + "_" + accuracy + ".csv"
+        file_extension = ".csv"
+        file_name = asset_name + "_" + str(start) + "_" + str(end) + "_" + accuracy
+        full_file_name = file_name + file_extension
+
+        if use_cached:
+            try:
+                file = open(folder_name + file_name + ".pickle", "rb")
+                loaded_history_obj = pickle.load(file)
+                self.hist = loaded_history_obj.hist
+                self.prices = loaded_history_obj.prices
+                self.times = loaded_history_obj.times
+                self.accuracy = loaded_history_obj.accuracy
+                self.timeframe = loaded_history_obj.timeframe
+                return
+            except Exception as e:
+                print(e)
+
+        """
+        TODO add this somewhere
+        with open(folder_name + file_name + '.pickle', 'wb') as f:
+                pickle.dump(self.hist, f)
+        """
 
         if accuracy == "M1":
+
             try:
-                file = open(folder_name + file_name, "r")
+                file = open(folder_name + full_file_name, "r")
                 lines = file.readlines()
                 file.close()
+
                 for line in lines:
                     price, time = line.split(",")
                     time = self.datetime_from_string(time, accuracy)
                     price = float(price)
                     self.hist.append({"price": price, "time": time.strftime("%H:%M:%S %d.%m.%Y")})
+
             except Exception as e:
                 print(e)
                 print("No csv file could be found, creating a new one ...")
@@ -107,7 +143,7 @@ class History:
 
             try:
                 # use existent file
-                file = open(folder_name + file_name)
+                file = open(folder_name + full_file_name)
                 lines = file.readlines()
                 file.close()
                 self.hist = []
@@ -126,6 +162,12 @@ class History:
         self.timeframe = self.hist[0]["time"] + "-" + self.hist[-1]["time"]
         self.prices = [elem["price"] for elem in self.hist]
         self.times = [elem["time"] for elem in self.hist]
+
+        if not os.path.exists(folder_name + file_name + ".pickle"):
+            with open(folder_name + file_name + '.pickle', 'wb') as f:
+                pickle.dump(self, f)
+
+        print("History init done")
 
     # <editor-fold desc="history reading stuff">
     def get_history_list(self, asset, start_year, end_year):
