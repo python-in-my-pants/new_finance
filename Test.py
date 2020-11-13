@@ -36,7 +36,7 @@ def func():
                                     y_labels=["heights", "lens", "momentum"])
 
     def backtest():
-        t = [100, 0.75]
+        t = Trader.DEFAULT
 
         """entry_sig_l = TradeSignal(cross_up, [makeIndicator(SMA, 5), makeIndicator(SMA, 10)])
         exit_sig_l = TradeSignal(cross_down, [makeIndicator(SMA, 5), makeIndicator(SMA, 10)])
@@ -46,7 +46,7 @@ def func():
 
         lp_co = strat_dict["indicator signal"](entry_sig_l, exit_sig_l, entry_sig_s, exit_sig_s)  # 82"""
 
-        trend_follow = strat_dict["trend follow"](5)
+        trend_follow = strat_dict["trend follow"](35)
 
         bt1 = Backtester(trend_follow, dax_hist,
                          use_balance=True, asset_data=AssetData.GER30,
@@ -59,7 +59,8 @@ def func():
             avg_h = avg([abs(t.height) for t in ts])
             print(i, avg_h, avg_h/i)"""
 
-        bt1.plot_trades(crosshair=True, plot_trends=True, min_trend_h=5)
+        bt1.plot_trades(crosshair=False, plot_trends=True, min_trend_h=35,
+                        indicators=[[1, TrendIndicator, 35]])
 
         """,
                         indicators=[[0, SMA, 5],

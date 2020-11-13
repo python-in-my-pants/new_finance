@@ -571,6 +571,7 @@ class Backtester:
 
                 plot_type, indicator_class, indicator_params = entry[0], entry[1], entry[2:]
                 indicator_data = indicator_class.get_full(used_history_prices, *indicator_params)
+
                 parameter_strings = ft.reduce(lambda a, b: a + " " + b, [str(p) for p in indicator_params])
                 indicator_name = indicator_class.__name__ + " " + parameter_strings
 

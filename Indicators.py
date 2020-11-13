@@ -11,15 +11,22 @@ class Indicator(ABC):
 
     def __call__(self, prices):
         self.assert_lookback(prices)
-        self.call(prices)
+        return self.call(prices)
 
     def assert_lookback(self, prices):
+        if self.lookback == 1 and type(prices) is not list:
+            return
         if len(prices) < self.lookback:
             raise AssertionError("Not enough values for indicator provided: {}, please supply {} values"
                                  .format(len(prices), self.lookback))
 
     @abstractmethod
-    def call(self, price):
+    def call(self, prices):
+        """
+
+        :param prices:
+        :return: single value of the indicator based on "prices" and maybe indicator state
+        """
         pass
 
     @abstractmethod
@@ -34,6 +41,107 @@ class Indicator(ABC):
 
 def makeIndicator(indicator_name, *indicator_params):
     return indicator_name(*indicator_params)
+
+
+class TrendIndicator(Indicator):
+
+    def __init__(self, threshold):
+        super().__init__()
+        self.lookback = 1
+
+        self.threshold = threshold
+        self.initializing = True
+
+        self.uptrend = -1
+        self.high = self.low = self.begin = 0
+        self.high_index = self.low_index = self.break_index = 0
+
+        self.call_index = 0
+
+    def call(self, price):
+
+        self.call_index += 1
+
+        i = self.call_index
+        last = price
+
+        if self.initializing:
+
+            if last > self.high:
+                self.high = last
+            if last < self.low:
+                self.low = last
+
+            if last > self.low + self.threshold:
+                self.uptrend = True
+                self.initializing = False
+            if last < self.high - self.threshold:
+                self.uptrend = True
+                self.initializing = False
+
+        # <editor-fold desc="strategy part">
+        else:
+
+            if self.uptrend:
+                if last > self.high:
+                    self.high = last
+                    self.high_index = i
+                else:
+                    if last < self.high - self.threshold:
+                        # count last peak as end of high trend and as start of low trend
+
+                        # up trend ends here
+                        # TODO former trend (down) was from lowindex:highindex+1 which we know only now
+
+                        # change index
+                        self.low = last
+                        self.low_index = i
+                        self.uptrend = False
+            else:
+                if last < self.low:
+                    self.low = last
+                    self.low_index = i
+                else:
+                    if last > self.low + self.threshold:
+
+                        # TODO former trend (up) was from highindex:lowindex+1 which we know only now
+                        # down trend ends here
+                        self.high = last
+                        self.high_index = i
+                        self.uptrend = True
+
+        if self.initializing:
+            return 0
+        else:
+            if self.uptrend:
+                return 1
+            else:
+                return -1
+
+    def initialize(self, prices):
+        self.initializing = True
+        self.high = self.low = self.begin = prices[0]
+        self.call_index = 0
+
+    @staticmethod
+    def get_full(prices, *args, **kwargs):
+
+        if args:
+            threshold = args[0]
+        elif kwargs:
+            threshold = kwargs["threshold"]
+        else:
+            raise AssertionError("You must provide a threshold for the TrendIndicator!")
+
+        trend_indicator_obj = TrendIndicator(threshold)
+        trend_indicator_obj.initialize(prices)
+        results = []
+        for price in prices:
+            tmp = trend_indicator_obj(price)
+            print(tmp)
+            results.append(tmp)
+
+        return results
 
 
 class SMA(Indicator):
