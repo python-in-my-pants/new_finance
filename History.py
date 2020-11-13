@@ -1,21 +1,11 @@
-import random
 from ctypes import *
 import json
 from datetime import datetime, timedelta
 import pandas as pd
 import pickle
 import os
-import time
 
 # ZORRO_T6_FILE_TO_READ = 'History/GER30_2019.t6'
-
-
-def timeit(func):
-    def inner(*args, **kwargs):
-        start = time.time()
-        func(*args, **kwargs)
-        print("{} took {}".format(func.__name__, time.time()-start))
-    return inner
 
 
 class AssetData:
@@ -88,11 +78,11 @@ class Tick:
 
 class History:
 
-    @timeit
     def __init__(self, asset_name, start, end=None, accuracy="M1", use_cached=True):
 
         if not end:
             end = start
+
         self.asset_name = asset_name
         self.hist = []
         self.accuracy = accuracy

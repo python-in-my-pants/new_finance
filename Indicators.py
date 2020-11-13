@@ -1,6 +1,7 @@
 import numpy as np
 from SignalTransformation import *
 from abc import ABC, abstractmethod
+from Analyzer import Analyzer
 
 
 class Indicator(ABC):
@@ -42,6 +43,7 @@ class SMA(Indicator):
         self.lookback = period
         self.period = period
         self.values = []
+        self.name = "SMA {}".format(self.period)
 
     def initialize(self, prices):
         self.values = [prices[0] for _ in range(self.period)]
@@ -52,6 +54,11 @@ class SMA(Indicator):
 
     @staticmethod
     def get_full(prices, *args, **kwargs):
+        if args:
+            return np.concatenate(
+                (np.asarray([prices[0] for _ in range(args[0] - 1)]),
+                 np.convolve(prices, np.repeat(1.0, args[0]) / args[0], 'valid')))
+
         return np.concatenate(
             (np.asarray([prices[0] for _ in range(kwargs["period"]-1)]),
              np.convolve(prices, np.repeat(1.0, kwargs["period"]) / kwargs["period"], 'valid')))
@@ -82,6 +89,8 @@ class Lowpass(Indicator):
         :param kwargs: cutoff_freq as the cutoff frequency for the lowpass filter
         :return: lowpass filtered prices
         """
+        if args:
+            return lowpass(prices, *args)
         return lowpass(prices, kwargs["cutoff_freq"])
 
 
@@ -159,4 +168,20 @@ class Bandstop:
         return [self(p) for p in prices]
 
 
+class FunnyIndicator:
 
+    def __init__(self):
+        pass
+
+    @staticmethod
+    def get_full(prices):
+        lowp_raw10 = Lowpass.get_full(prices, cutoff_freq=10)
+        derivative = Analyzer.derive_same_len(lowp_raw10, times=2)  # 2
+        mader = [i for i in Lowpass.get_full(derivative, cutoff_freq=5)]
+        return Lowpass.get_full(mader, cutoff_freq=10)
+
+    def __call__(self, *args, **kwargs):
+        pass
+
+    def initialize(self, prices):
+        pass

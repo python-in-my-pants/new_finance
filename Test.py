@@ -1,4 +1,5 @@
 from Analyzer import *
+from Backtester import Backtester
 from Strats import *
 from History import *
 from ArtificialHistory import *
@@ -10,11 +11,11 @@ import numpy as np
 
 def func():
 
-    dax_hist = History("GER30", 2017, use_cached=True)
+    dax_hist = History("GER30", 2016, use_cached=True)
 
     def autocor_trend_mom():
 
-        anal16 = Analyzer(dax_hist, min_trend_h=82, realistic=False)
+        anal16 = Analyzer(dax_hist, min_trend_h=5, realistic=False)
 
         moms = np.asarray([abs(trend.momentum) for trend in anal16.trend_list])
 
@@ -24,7 +25,7 @@ def func():
         anal16 = Analyzer(dax_hist)
         plotter = Plotter(anal16)
 
-        trends = anal16.get_trends(anal16.hist, min_trend_h=10, realistic=False)
+        trends = anal16.get_trends(anal16.hist, min_trend_h=5, realistic=False)
         trend_heights = [abs(x.height) for x in trends]
         trend_len = [abs(x.len) for x in trends]
         mom = [abs(x.height/x.len)*10 for x in trends]
@@ -35,13 +36,34 @@ def func():
                                     y_labels=["heights", "lens", "momentum"])
 
     def backtest():
-        t = Trader.HALF_RISK
-        trend_follow = strat_dict["trend follow"](82)  # 82
+        t = [100, 0.75]
 
-        bt2 = Backtester(trend_follow, dax_hist, use_balance=True, asset_data=AssetData.GER30,
-                         trader_data=t, ts_in_pips=45, sl_in_pips=45)
+        """entry_sig_l = TradeSignal(cross_up, [makeIndicator(SMA, 5), makeIndicator(SMA, 10)])
+        exit_sig_l = TradeSignal(cross_down, [makeIndicator(SMA, 5), makeIndicator(SMA, 10)])
 
-        bt2.test(use_sl_for_risk=False, full_print=True)
+        entry_sig_s = TradeSignal(cross_down, [makeIndicator(SMA, 5), makeIndicator(SMA, 10)])
+        exit_sig_s = TradeSignal(cross_up, [makeIndicator(SMA, 5), makeIndicator(SMA, 10)])
+
+        lp_co = strat_dict["indicator signal"](entry_sig_l, exit_sig_l, entry_sig_s, exit_sig_s)  # 82"""
+
+        trend_follow = strat_dict["trend follow"](5)
+
+        bt1 = Backtester(trend_follow, dax_hist,
+                         use_balance=True, asset_data=AssetData.GER30,
+                         trader_data=t)#, ts_in_pips=45, sl_in_pips=45)
+        # bt1.deep_test(deepness=100)
+        bt1.test()
+
+        """for i in range(5, 200, 5):
+            ts = anal.get_trends(dax_hist.hist, min_trend_h=i)
+            avg_h = avg([abs(t.height) for t in ts])
+            print(i, avg_h, avg_h/i)"""
+
+        bt1.plot_trades(crosshair=True, plot_trends=True, min_trend_h=5)
+
+        """,
+                        indicators=[[0, SMA, 5],
+                                    [0, SMA, 10]])"""
         # bt2.profit_with_tax(2016, 2020, sl_for_risk=False)
 
     def plot_some_indicators():
@@ -90,12 +112,21 @@ def func():
 
         signal_strat = strat_dict["indicator signal"](in_long, out_long, in_short, out_short)
 
-        bt2 = Backtester(signal_strat, dax_hist, use_balance=True,
+        bt2 = Backtester(signal_strat, dax_hist,
+                         use_balance=False,
                          asset_data=AssetData.GER30, trader_data=trader)
 
         bt2.test(use_sl_for_risk=False, full_print=True)
 
-    autocor_trend_mom()
+    def test_artif_hist():
+
+        arti = ArtificialHistory(dax_hist, h=40)
+
+        Plotter.plot_general_same_y(list(range(len(dax_hist.prices))),
+                                    [dax_hist.prices, arti.prices],
+                                    y_labels=["real", "arti"])
+
+    backtest()
 
 
 func()

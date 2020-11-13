@@ -1,7 +1,12 @@
 
 def cross_up(a, b):
+
     """
-    did a cross over b (so was lower, now is higher)?
+    TODO still wrong,must have been lower sometime and just recently crossed up
+    """
+
+    """
+    did "a" cross over "b" (so was lower, now is higher)?
     :param a:
     :param b:
     :return: boolean indicating wether a cross happened
@@ -17,19 +22,7 @@ def cross_up(a, b):
             return False, None
         b = [b for _ in range(len(a))]
 
-    a_greater_b = False
-    min_len = min(len(a), len(b))
-    for index in range(min_len):
-        i = -index-1
-
-        if not a_greater_b:
-            if a[i] >= b[i]:
-                a_greater_b = True
-        else:
-            if a < b:
-                return True, i
-
-    return False, None
+    return a[-2] <= b[-2] and a[-1] > b[-1]
 
 
 def cross_down(a, b):
@@ -43,11 +36,11 @@ def cross(a, b):
     :return: boolean indicating if cross occured;
              the last index where a[index] == b[index] or a[index] == b for scalar b and vice versa
     """
-    up, up_index = cross_up(a, b)
-    down, down_index = cross_down(a, b)
+    up = cross_up(a, b)
+    down = cross_down(a, b)
 
     if up or down:
-        return True, max(up_index, down_index)
+        return True
     else:
         return False, None
 

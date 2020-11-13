@@ -380,7 +380,8 @@ class FilteredTrendFollowStrat(Strategy):
 
 class IndicatorSignalStrat(Strategy):
 
-    def __init__(self, entry_signal_long, exit_signal_long, entry_signal_short, exit_signal_short):
+    def __init__(self, entry_signal_long, exit_signal_long,
+                       entry_signal_short, exit_signal_short):
 
         self.lookback = max(entry_signal_long.lookback, exit_signal_long.lookback,
                             entry_signal_short.lookback, exit_signal_short.lookback)
@@ -406,11 +407,11 @@ class IndicatorSignalStrat(Strategy):
 
         prices = [d["price"] for d in data]
 
-        enter_long, enter_long_value = self.entry_signal_long(prices)
-        exit_long, exit_long_value = self.exit_signal_long(prices)
+        enter_long = self.entry_signal_long(prices)
+        exit_long = self.exit_signal_long(prices)
 
-        enter_short, enter_short_value = self.entry_signal_short(prices)
-        exit_short, exit_short_value = self.exit_signal_short(prices)
+        enter_short = self.entry_signal_short(prices)
+        exit_short = self.exit_signal_short(prices)
 
         if enter_long and not exit_long:
             actions.append(["enterLong", price, time, ()])
