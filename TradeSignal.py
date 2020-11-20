@@ -22,16 +22,14 @@ class TradeSignal:
     def __call__(self, prices):
 
         if len(prices) < self.lookback:
-            print("Error in TradeSignal call, too few prices provided, lookback not reached! "
+            print("Error in TradeSignal call, too few prices provided, look back not reached! "
                   "Provided {}, lookback is {}".format(len(prices), self.lookback))
             return
 
-        indicator_values = []
         for indicator in self.indicators:
             indicator(prices[-indicator.lookback:])
-            indicator_values.append(indicator.values[-indicator.lookback:])
 
-        return self.trigger(*indicator_values)
+        return self.trigger(*self.indicators)
 
     def initialize(self, prices):
 

@@ -243,7 +243,7 @@ class TrendFollowStrat(Strategy):
                 self.uptrend = True
                 self.initializing = False
             if last < self.high - self.threshold:
-                self.uptrend = True
+                self.uptrend = False
                 self.initializing = False
 
         # <editor-fold desc="strategy part">
@@ -385,6 +385,7 @@ class IndicatorSignalStrat(Strategy):
 
         self.lookback = max(entry_signal_long.lookback, exit_signal_long.lookback,
                             entry_signal_short.lookback, exit_signal_short.lookback)
+        print("Lookback:", self.lookback)
         super().__init__(self.lookback)
 
         self.name = "IndicatorSignalStrat"

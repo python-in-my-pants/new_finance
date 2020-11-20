@@ -8,10 +8,13 @@ class Indicator(ABC):
 
     def __init__(self):
         self.lookback = 0
+        self.value_history = list()
 
     def __call__(self, prices):
         self.assert_lookback(prices)
-        return self.call(prices)
+        v = self.call(prices)
+        self.value_history.append(v)
+        return v
 
     def assert_lookback(self, prices):
         if self.lookback == 1 and type(prices) is not list:
@@ -23,7 +26,6 @@ class Indicator(ABC):
     @abstractmethod
     def call(self, prices):
         """
-
         :param prices:
         :return: single value of the indicator based on "prices" and maybe indicator state
         """
@@ -60,6 +62,12 @@ class TrendIndicator(Indicator):
 
     def call(self, price):
 
+        uptrend = 1
+        downtrend = -1
+        undecided = 0
+        stagnating_uptrend = 0.5
+        stagnating_downtrend = -0.5
+
         self.call_index += 1
 
         i = self.call_index
@@ -75,17 +83,21 @@ class TrendIndicator(Indicator):
             if last > self.low + self.threshold:
                 self.uptrend = True
                 self.initializing = False
+                return uptrend
             if last < self.high - self.threshold:
-                self.uptrend = True
+                self.uptrend = False
                 self.initializing = False
+                return downtrend
 
-        # <editor-fold desc="strategy part">
+            return undecided
+
         else:
 
             if self.uptrend:
                 if last > self.high:
                     self.high = last
                     self.high_index = i
+                    return uptrend
                 else:
                     if last < self.high - self.threshold:
                         # count last peak as end of high trend and as start of low trend
@@ -97,10 +109,13 @@ class TrendIndicator(Indicator):
                         self.low = last
                         self.low_index = i
                         self.uptrend = False
+                        return downtrend
+                    return stagnating_uptrend
             else:
                 if last < self.low:
                     self.low = last
                     self.low_index = i
+                    return downtrend
                 else:
                     if last > self.low + self.threshold:
 
@@ -109,14 +124,8 @@ class TrendIndicator(Indicator):
                         self.high = last
                         self.high_index = i
                         self.uptrend = True
-
-        if self.initializing:
-            return 0
-        else:
-            if self.uptrend:
-                return 1
-            else:
-                return -1
+                        return uptrend
+                    return stagnating_downtrend
 
     def initialize(self, prices):
         self.initializing = True
@@ -138,7 +147,6 @@ class TrendIndicator(Indicator):
         results = []
         for price in prices:
             tmp = trend_indicator_obj(price)
-            print(tmp)
             results.append(tmp)
 
         return results
@@ -149,16 +157,17 @@ class SMA(Indicator):
     def __init__(self, period):
         Indicator.__init__(self)
         self.lookback = period
-        self.period = period
-        self.values = []
-        self.name = "SMA {}".format(self.period)
+        self._period = period
+        self._values = []
+        self.name = "SMA {}".format(self._period)
 
     def initialize(self, prices):
-        self.values = [prices[0] for _ in range(self.period)]
+        self._values = [prices[0] for _ in range(self._period-1)]
+        self.value_history += self._values
 
     def call(self, prices):
-        self.values = prices #self.values[1:] + [prices]
-        return sum(self.values)/len(self.values)
+        self._values = self._values[1:] + [prices[-1]]
+        return sum(self._values)/len(self._values)
 
     @staticmethod
     def get_full(prices, *args, **kwargs):

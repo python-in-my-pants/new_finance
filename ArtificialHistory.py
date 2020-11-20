@@ -155,7 +155,10 @@ class ArtificialHistory:
 
             sim_table[t1.trend_id] = {}
             for t2 in self.real_trends:
-                sim_table[t1.trend_id][t2.trend_id] = t1.get_similarity(t2)
+                if t1.trend_id != t2.trend_id:
+                    sim_table[t1.trend_id][t2.trend_id] = t1.get_similarity(t2)
+                else:
+                    sim_table[t1.trend_id][t2.trend_id] = 0
 
         if sim_table is not None:
             print("Sim table is full")
@@ -195,7 +198,8 @@ class ArtificialHistory:
                 print(base_trend)
                 print(trend)
                 sys.exit(-1)
-            if sim >= 0:
+
+            if sim > 0:
                 containers.append(Container(sim, trend))
                 summed_sim += sim
 

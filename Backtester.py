@@ -230,7 +230,7 @@ class Backtester:
         results = self.get_results(p=p)
         if p and not fast:
             print("Best possible results:\n")
-            Analyzer(hist_obj=self.hist_obj, min_trend_h=0, realistic=False).SIM_trend_follow(True)
+            Analyzer(hist_obj=self.hist_obj, min_trend_h=0, realistic=False).simulate_trend_follow(True)
 
         return results
 
@@ -519,6 +519,24 @@ class Backtester:
 
     def plot_trades(self, min_trend_h=5, realistic=False, plot_trends=True, indicators=None,
                     bar_amount=10000, start_bar=0, crosshair=True):
+
+        """
+        :param min_trend_h: used for plotting trends
+        :param realistic: whether the plotted trends should be from realistic conditions
+        :param plot_trends: whether to plot trends, recommended for stratgies using trends
+        :param indicators: list of tuples:
+
+                           plot_type:
+                               plot_type=0 => same y values, plot_type=1 => seperate y values
+                           indicator_class
+                               class name of the indicator to plot, e.g. SMA, no instance needed here
+                           indicator_params
+                               potential list of arguments to construct the indicator with, e.g. 26 for SMA26
+        :param bar_amount: amount of bars to plot
+        :param start_bar: start plotting only from this bar on
+        :param crosshair: use a crosshair cursor
+        :return: None
+        """
 
         plt.rc('figure', facecolor="#333333", edgecolor="#333333")
         plt.rc('axes', facecolor="#353535", edgecolor="#000000")

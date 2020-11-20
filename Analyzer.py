@@ -10,6 +10,9 @@ from History import History
 from scipy import *
 import statsmodels.api as sm
 from Utility import *
+import os
+import pickle
+import pandas as pd
 
 
 class Trend:
@@ -33,7 +36,7 @@ class Trend:
         self.amplitude = max(self.prices) - self.prices[0] if self.type == "Up  " else self.prices[0] - min(self.prices)
         self.avg = sum(self.prices) / self.len
         self.med = statistics.median(self.prices)
-        self.max_dd = self.get_max_dd()  # amplitude of highest move in diametral direction of the trend
+        self.max_dd = self.get_max_dd()  # amplitude of highest move in opposite direction of the trend
 
         self.frac_dim = self.get_frac_dim()
         self.frad_dims = [Analyzer.get_frac_dim_static(self.prices[:i+1]) for i in range(len(self.prices))]
@@ -50,6 +53,12 @@ class Trend:
         def get_height_factor(h1, h2):
             # 1 if h1=h2, -1 if h1=-h2 or vice versa, -> 0 for big diffrences, sign indicates direction difference
             # -means up/down / down/up, +mean up/up / down/down
+
+            # tODO does this make sense?
+            if h2 == 0:
+                return 1 / h1
+            #################################
+
             q = h1/h2
             if -1 <= q <= 1:
                 return q
@@ -182,14 +191,69 @@ class Trend:
 
 class Analyzer:
 
-    def __init__(self, hist_obj, min_trend_h=20, realistic=False, fast=False):
+    def __init__(self, hist_obj, min_trend_h, realistic=False, fast=False):
 
         self.hist_obj = hist_obj
         self.hist = hist_obj.hist
+        self.min_trend_h = min_trend_h
 
         if not fast:
             self.volatility = self.get_hist_volatility(whole_timeframe=True)[0]
             self.trend_list = self.get_trends(self.hist, min_trend_h=min_trend_h, realistic=realistic)
+            self.sim_table = self.get_sim_table(h=min_trend_h)
+
+    def get_avg_following_trend_similarity(self):
+        return avg([abs(trend.get_similarity(trend.next_trend)) for trend in self.trend_list[:-1]])
+
+    def make_sim_table(self, pr=False):
+
+        sim_table = {}
+        i = 1
+        p =0
+        for t1 in self.trend_list:
+
+            if pr:
+                if i % (len(self.trend_list) // 100) == 0:
+                    p += 1
+                    print(100*i/len(self.trend_list), "% done")
+                i += 1
+
+            sim_table[t1.trend_id] = {}
+            for t2 in self.trend_list:
+                if t1.trend_id != t2.trend_id:
+                    sim_table[t1.trend_id][t2.trend_id] = t1.get_similarity(t2)
+                else:
+                    sim_table[t1.trend_id][t2.trend_id] = 0
+
+        if sim_table is not None:
+            print("Trend similarity table created successfully!")
+
+        return sim_table
+
+    def get_sim_table(self, h):
+
+        sim_table_path = "TrendTableObjects/" + self.hist_obj.asset_name + "_" + \
+                         self.hist_obj.timeframe + "_" + str(h)
+        sim_table_path = sim_table_path.replace(" ", "_").replace(".", "-").replace(":", "")
+        try:
+            with open(sim_table_path + ".pickle", "rb") as file:
+                sim_table = pickle.load(file)
+                if sim_table is None:
+                    raise TypeError("sim table is none after reading from file")
+                return sim_table
+        except FileNotFoundError:
+            print("Creating sim table at", sim_table_path + ".pickle with", len(self.trend_list), "^2 entries")
+            sim_table = self.make_sim_table()
+
+            if not os.path.exists(sim_table_path + ".pickle") and False:  # TODO ran out of input
+                try:
+                    with open(sim_table_path + ".pickle", 'wb') as f:
+                        pickle.dump(self.sim_table, f)
+                except Exception as e:
+                    print("Exception while writing similarity table to file")
+                    print(e)
+
+            return sim_table
 
     # <editor-fold desc="GETTER">
     def get_avg_trend_h(self):
@@ -305,6 +369,9 @@ class Analyzer:
                         high_index = i
                         break_index = i
                         uptrend = True
+
+        for i in range(len(trends)-1):
+            trends[i].next_trend = trends[i+1]
 
         return trends
 
@@ -442,9 +509,12 @@ class Analyzer:
 
         return rythm
 
-    def print_trends(self, limit=10, print_prices=False, print_dds=False, direction_key=None, coherence_key=None):
+    def print_trends(self, limit=10, print_prices=False, print_dds=False,
+                     direction_key=None, coherence_key=None):
+
         if direction_key and direction_key == "Up":
             direction_key = "Up  "
+
         for t in self.trend_list[:limit]:
             if direction_key is None or t.type == direction_key:
                 if coherence_key is None or t.type_coherence == coherence_key:
@@ -457,7 +527,7 @@ class Analyzer:
                             print("{:+8.2f} {:+8.2f} {:+8.2f}".format(t.prices[i], t.derivate1[i], t.derivate2[i]))
             print("---------------------")
 
-    def SIM_trend_follow(self, p=False):
+    def simulate_trend_follow(self, p=False):
         longs = list(filter(lambda y: y.type == "Up  ", self.trend_list))
         shorts = list(filter(lambda y: y.type == "Down", self.trend_list))
 
@@ -484,6 +554,172 @@ class Analyzer:
         else:
             return Analyzer.derive_same_len([0] + [seq[i+1]-seq[i] for i in range(len(seq)-1)], times-1)
 
+    class Container:
+        def __init__(self, s, u):
+            self.sim = s
+            self.trend = u
+
+    def get_similar_trends(self, base_trend, n=None, similarity_threshold=0):
+
+        if base_trend is None:
+            raise TypeError("Base trend is none")
+
+        if self.sim_table is None:
+            raise TypeError("Sim table is None")
+
+        if similarity_threshold < 0:
+            similarity_threshold = 0
+
+        containers = []
+        summed_similarity = 0
+        for trend in self.trend_list[:-1]:
+
+            if trend is None:
+                raise TypeError("Trend is None")
+            try:
+                sim = self.sim_table[base_trend.trend_id][trend.trend_id]
+            except KeyError:
+                sim = base_trend.get_similarity(trend)
+
+            if sim > similarity_threshold and trend:
+                containers.append(Analyzer.Container(sim, trend))
+                summed_similarity += sim
+
+            if n and len(containers) >= n:
+                break
+
+        containers.sort(key=lambda x: x.sim, reverse=True)
+
+        return containers, summed_similarity
+
+    def expected_following_trend_from_trend(self, base_trend,
+                                            number_of_similar_trends_used=None, similarity_threshold=0):
+        """
+
+        :param base_trend: current trend, preceding the one to predict
+        :param number_of_similar_trends_used:
+        :param similarity_threshold: between -1 and 1, minimum similarity for the considered trends
+        :return: expected length and height of the trend following the given one
+        """
+
+        containers, summed_similarity = self.get_similar_trends(base_trend,
+                                                                number_of_similar_trends_used,
+                                                                similarity_threshold)
+
+        expected_len = sum([con.trend.next_trend.len * (con.sim / summed_similarity) for con in containers])
+        expected_height = sum([con.trend.next_trend.height * (con.sim / summed_similarity) for con in containers])
+
+        return expected_len, expected_height
+
+    def get_intern_trend_prediction_error(self, sim_threshold=0, p=False, use_strict_mode=True):
+        """
+        Plot trends in space (len vs height). Plot predicted next trend blue and connect them with a blue line.
+        Connect following trend to base trend with a green line.
+        :return: None
+        """
+
+        len_errors = list()
+        height_errors = list()
+
+        rel_len_errors = list()
+        rel_height_errors = list()
+
+        for trend in self.trend_list[:-1]:
+
+            predicted_len, predicted_height = \
+                self.expected_following_trend_from_trend(trend, similarity_threshold=sim_threshold)
+
+            if not (predicted_len == 0 and predicted_height == 0):
+
+                cond = True
+                if not use_strict_mode:
+                    cond = predicted_height > trend.next_trend.height
+
+                len_error = abs(trend.next_trend.len - predicted_len)
+                len_errors.append(len_error)
+
+                rel_len_error = abs(len_error / trend.next_trend.len)
+                rel_len_errors.append(rel_len_error)
+
+                height_error = abs(trend.next_trend.height - predicted_height)
+                height_errors.append(height_error if cond else 0)
+
+                rel_height_error = abs(height_error / trend.next_trend.height)
+                rel_height_errors.append(rel_height_error if cond else 0)
+
+        results = {
+            "Prediction percentage": len(len_errors) / len(self.trend_list[:-1]),
+            "Avg len error": avg(len_errors),
+            "Avg relative len error": str(avg(rel_len_errors)*100)+"%",
+            "Avg height error": avg(height_errors),
+            "Avg relative height error": str(avg(rel_height_errors)*100)+"%"
+        }
+
+        if p:
+            df = pd.DataFrame(results, index=[0])
+
+            pd.set_option("display.max_rows", None, "display.max_columns", None)
+            pd.set_option('display.width', 1000)
+
+            print(df, "\n")
+
+        return results
+
+    def get_extern_trend_prediction_error(self, trends, sim_threshold=0, p=False, use_strict_mode=True):
+        """
+        Plot trends in space (len vs height). Plot predicted next trend blue and connect them with a blue line.
+        Connect following trend to base trend with a green line.
+        :return: None
+        """
+
+        len_errors = list()
+        height_errors = list()
+
+        rel_len_errors = list()
+        rel_height_errors = list()
+
+        for trend in trends[:-1]:
+
+            predicted_len, predicted_height = \
+                self.expected_following_trend_from_trend(trend, similarity_threshold=sim_threshold)
+
+            if not (predicted_len == 0 and predicted_height == 0):
+
+                cond = True
+                if not use_strict_mode:
+                    cond = predicted_height > trend.next_trend.height
+
+                len_error = abs(trend.next_trend.len - predicted_len)
+                len_errors.append(len_error)
+
+                rel_len_error = abs(len_error / trend.next_trend.len)
+                rel_len_errors.append(rel_len_error)
+
+                height_error = abs(trend.next_trend.height - predicted_height)
+                height_errors.append(height_error if cond else 0)
+
+                rel_height_error = abs(height_error / trend.next_trend.height)
+                rel_height_errors.append(rel_height_error if cond else 0)
+
+        results = {
+            "Prediction percentage": len(len_errors) / len(trends[:-1]),
+            "Avg len error": avg(len_errors),
+            "Avg relative len error": str(avg(rel_len_errors)*100)+"%",
+            "Avg height error": avg(height_errors),
+            "Avg relative height error": str(avg(rel_height_errors)*100)+"%"
+        }
+
+        if p:
+            df = pd.DataFrame(results, index=[0])
+
+            pd.set_option("display.max_rows", None, "display.max_columns", None)
+            pd.set_option('display.width', 1000)
+
+            print(df)
+
+        return results
+
+
     # <editor-fold desc="Probability getter">
     def GTEP_len(self, curr_len, max_len=500):
         longer_trends = list(filter(lambda x: x.len >= curr_len, self.trend_list))
@@ -496,6 +732,13 @@ class Analyzer:
         return [elem / len(longer_trends) for elem in my_list]
 
     def GTCP_len_single(self, curr_len, expected_continuation):
+        """
+        Probability of a trend with curr_len continuing for at least expected_continuation
+
+        :param curr_len: current length of the trend
+        :param expected_continuation:
+        :return: Probability of a trend with curr_len continuing for expected_continuation
+        """
         if expected_continuation < 0:
             print("Expected continuation must be >= 0!")
             return -1
@@ -504,6 +747,13 @@ class Analyzer:
         return len(longer_trends)/len(trend_base)
 
     def GTEP_len_single(self, curr_len, expected_continuation):
+        """
+        Probability of a trend with curr_len ending before expected_continuation
+
+        :param curr_len: current length of the trend
+        :param expected_continuation:
+        :return: Probability of a trend with curr_len ending before expected_continuation
+        """
         return 1-self.GTCP_len_single(curr_len, expected_continuation)
 
     # ------------------------
@@ -704,6 +954,73 @@ class Plotter:
         plt.rc('axes', facecolor="#353535", edgecolor="#000000")
         plt.rc('lines', color="#393939")
         plt.rc('grid', color="#121212")
+
+    def scatter_trends(self):
+        true_lens = [t.len for t in self.analyzer.trend_list if t.type_coherence is True]
+        true_heights = [t.height for t in self.analyzer.trend_list if t.type_coherence is True]
+
+        false_lens = [t.len for t in self.analyzer.trend_list if t.type_coherence is False]
+        false_heights = [t.height for t in self.analyzer.trend_list if t.type_coherence is False]
+
+        fig = plt.figure()
+        ax1 = fig.add_subplot(111)
+
+        max_len = max(max(true_lens), max(false_lens))
+        ax1.plot(range(max_len), [self.analyzer.min_trend_h for _ in range(max_len)], c="black")
+        ax1.plot(range(max_len), [-self.analyzer.min_trend_h for _ in range(max_len)], c="black")
+
+        ax1.scatter(true_lens, true_heights, marker=".", c="g")
+        ax1.scatter(false_lens, false_heights, marker="^", c="r")
+
+        plt.show()
+
+    def plot_trend_predictions(self, l=0, m=10, sim_threshold=0.3):
+        """
+        Plot trends in space (len vs height). Plot predicted next trend blue and connect them with a blue line.
+        Connect following trend to base trend with a green line.
+        :return: None
+        """
+        fig = plt.figure()
+        ax1 = fig.add_subplot(111)
+        plt.grid(True)
+
+        trends_used = self.analyzer.trend_list[:-1]
+
+        if m:
+            trends_used = trends_used[l:m]
+
+        for i, trend in enumerate(trends_used):
+
+            predicted_len, predicted_height = \
+                self.analyzer.expected_following_trend_from_trend(trend,
+                                                                  similarity_threshold=sim_threshold)
+
+            # plot base trend
+            ax1.scatter(trend.len, trend.height, c="black", marker=".")
+            ax1.annotate("T"+str(i+l), (trend.len, trend.height))
+
+            # plot line connecting to next trend
+            x = [trend.len, trend.next_trend.len]
+            y = [trend.height, trend.next_trend.height]
+            ax1.plot(x, y, c="green")
+
+            if not (predicted_len == 0 and predicted_height == 0):
+
+                # plot prediction
+                ax1.scatter(predicted_len, predicted_height, c="blue")
+                ax1.annotate("P" + str(i+1+l), (predicted_len, predicted_height-10))
+
+                # plot line connection base trend and prediction
+                x = [trend.len, predicted_len]
+                y = [trend.height, predicted_height]
+                ax1.plot(x, y, c="blue")
+
+                # plot error line between next trend and prediction
+                x = [trend.next_trend.len, predicted_len]
+                y = [trend.next_trend.height, predicted_height]
+                ax1.plot(x, y, c="red")
+
+        plt.show()
 
     def plot_history(self, max_len=1440, start_date=None, end_date=None, full_hist=False):
 
@@ -968,30 +1285,14 @@ class Plotter:
         plt.rc('axes', facecolor="#353535", edgecolor="#000000")
         plt.rc('lines', color="#393939")
         plt.rc('grid', color="#121212")
+        if type(data) == list:
+            data = np.asarray(data)
         sm.graphics.tsa.plot_acf(data, zero=False)
-        plt.show()
-
-    def scatter_trends(self):
-        x = [t.len for t in self.analyzer.trend_list]
-        y = [t.height for t in self.analyzer.trend_list]
-
-        colors = [("#ff0000" if t.height < 0 else "#00ff00") for t in self.analyzer.trend_list]
-        p = plt.scatter(x, y, s=1, c=colors)
-        ax = p.figure.add_subplot(111)
-        ax.set_aspect('equal', adjustable='box')
-
-        plt.grid(True)
-        plt.xlabel("Trend length")
-        plt.ylabel("Trend height")
-        plt.tight_layout()
         plt.show()
 
     def trend_similarities(self):
 
-        for i in range(len(self.analyzer.trend_list)-1):
-            self.analyzer.trend_list[i].next_trend = self.analyzer.trend_list[i+1]
-
-        x = range(len(self.analyzer.trend_list[:-1]))
+        x = range(len(self.analyzer.trend_list)-1)
         y = [trend.get_similarity(trend.next_trend) for trend in self.analyzer.trend_list[:-1]]
 
         plt.plot(x, y)
@@ -1009,7 +1310,7 @@ class Plotter:
         sls = []
         for i in range(min_trend_len, max_trend_len, step):
             self.analyzer.trend_list = self.analyzer.get_trends(self.analyzer.hist, min_trend_h=i, realistic=realistic)
-            lw, sw, ll, sl, s = self.analyzer.SIM_trend_follow()
+            lw, sw, ll, sl, s = self.analyzer.simulate_trend_follow()
             profits.append(s)
             lws.append(lw)
             sws.append(sw)
