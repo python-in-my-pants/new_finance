@@ -1,6 +1,6 @@
 class TradeSignal:
 
-    def __init__(self, trigger, indicators, direction="up"):
+    def __init__(self, trigger, indicators):
         """
         example call:
 
@@ -15,9 +15,18 @@ class TradeSignal:
             indicators = [indicators]
 
         self.indicators = indicators
-        self.lookback = max([indicator.lookback+1 for indicator in self.indicators])
+        # holds all the values returned from its indicators
+        self.indicator_value_histories = [[] for _ in range(len(self.indicators))]
+        self.lookback = max([indicator.lookback for indicator in self.indicators])
         self.trigger = trigger
-        self.direction = direction
+
+    def initialize(self, prices):
+
+        for indicator in self.indicators:
+            indicator.initialize(prices)
+
+        for i, indicator_value_hist in enumerate(self.indicator_value_histories):
+            indicator_value_hist.append(self.indicators[i](prices))
 
     def __call__(self, prices):
 
@@ -26,12 +35,12 @@ class TradeSignal:
                   "Provided {}, lookback is {}".format(len(prices), self.lookback))
             return
 
-        for indicator in self.indicators:
-            indicator(prices[-indicator.lookback:])
+        for i, indicator_value_hist in enumerate(self.indicator_value_histories):
+            relevant_prices = prices[-self.indicators[i].lookback:]
+            indicator_value = self.indicators[i](relevant_prices)
+            indicator_value_hist.append(indicator_value)
 
-        return self.trigger(*self.indicators)
+        for entry in self.indicator_value_histories:
+            print("indicator values from trade signal:", entry)
 
-    def initialize(self, prices):
-
-        for indicator in self.indicators:
-            indicator.initialize(prices)
+        return self.trigger(*self.indicator_value_histories)

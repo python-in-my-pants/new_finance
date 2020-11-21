@@ -78,18 +78,25 @@ class Backtester:
         self.max_balance = self.base_balance
         margin_call = False
 
-        self.strat.initrun(self.hist_obj.hist[:lookback + 1])
+        if lookback > 0:
+            self.strat.initrun(self.hist_obj.hist[:lookback])  # was +1
+        else:
+            self.strat.initrun(self.hist_obj.hist)
 
         if p:
             print("\nStarting backtest for strat", self.strat.name, "on", self.hist_obj.asset_name,
                   "over", self.hist_obj.timeframe)
 
-        for index in range(len(prices)):
+        for index in range(len(prices)-1):
 
             if index >= lookback:
 
-                price = prices[index]
-                time = times[index]
+                # beware: we can only enter in the next check after the minute in which an event happened ended,
+                # so in the nex minute; we are "lagging" 1 minute because this is the smallest time resolution we use
+                # and we can not react "instantly", same would go for seconds, we could only act in the second AFTER
+                # an event happened, because we need to check for it first
+                price = prices[index+1]
+                time = times[index+1]
 
                 # test SL and TP and TS for all open trades
                 for trade in self.open_long_trades + self.open_short_trades:
@@ -157,7 +164,7 @@ class Backtester:
                         if self.use_balance and self.available_margin / 2 + total_positions_worth > 0:
                             margin_call = False
 
-                        action, price, time, trade_params = entry
+                        action, trade_params = entry
 
                         if only_long and (action == "enterShort" or action == "exitShort"):
                             continue
@@ -571,9 +578,12 @@ class Backtester:
         ax1.set_ylabel("Price", color="tab:red")
 
         if plot_trends:
+
             # plot trends
-            trend_x_values = [[time_index_dict[trend.start_time], time_index_dict[trend.end_time]] for trend in trends]
-            trend_y_values = [[trend.prices[0], trend.prices[-1]] for trend in trends]
+            trend_x_values = [[time_index_dict[trend.start_time],
+                               time_index_dict[trend.end_time]] for trend in trends]
+            trend_y_values = [[trend.prices[0],
+                               trend.prices[-1]] for trend in trends]
 
             for i in range(len(trends)):
                 ax1.plot(trend_x_values[i],
@@ -588,10 +598,14 @@ class Backtester:
             for entry in indicators:
 
                 plot_type, indicator_class, indicator_params = entry[0], entry[1], entry[2:]
+
                 indicator_data = indicator_class.get_full(used_history_prices, *indicator_params)
 
                 parameter_strings = ft.reduce(lambda a, b: a + " " + b, [str(p) for p in indicator_params])
+
                 indicator_name = indicator_class.__name__ + " " + parameter_strings
+
+                #dgb = [value for value in indicator_data[start_bar:bar_amount + start_bar]]
 
                 if plot_type == 0:
                     ax1.plot(list(range(start_bar, bar_amount + start_bar)),
@@ -603,8 +617,10 @@ class Backtester:
                                      label=indicator_name)
 
         # plot trades
-        trade_x_values = [[time_index_dict[trade.open_time], time_index_dict[trade.close_time]] for trade in trades]
-        trade_y_values = [[trade.open_price, trade.close_price] for trade in trades]
+        trade_x_values = [[time_index_dict[trade.open_time],
+                           time_index_dict[trade.close_time]] for trade in trades]
+        trade_y_values = [[trade.open_price,
+                           trade.close_price] for trade in trades]
 
         for i in range(len(trades)):
             ax1.plot(trade_x_values[i],
@@ -613,8 +629,11 @@ class Backtester:
 
         # -----------------------
 
+        # todo this did work for a moment, then stopped working???
+        #ax1.set_xticks(range(len(used_history))[::30])
+        #ax1.set_xticklabels([q["time"] for q in used_history][::30])
+
         ax1.tick_params(axis="y")
-        plt.xticks(rotation=90)
 
         """
         profits = [t.profit for t in trades]
@@ -631,6 +650,7 @@ class Backtester:
 
         plt.xticks(rotation=90)
         plt.tight_layout()
+        fig.subplots_adjust(bottom=0.23)
         plt.grid(True)
         if indicators:
             plt.legend()

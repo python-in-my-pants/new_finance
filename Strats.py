@@ -2,6 +2,8 @@ import inspect
 from abc import ABC, abstractmethod
 from History import History
 import datetime
+from Indicators import *
+from Triggers import *
 
 
 class Strategy(ABC):
@@ -258,8 +260,8 @@ class TrendFollowStrat(Strategy):
                         # count last peak as end of high trend and as start of low trend
 
                         # todo: up trend ends here
-                        actions.append(["exitLong", last, data[0]["time"], []])
-                        actions.append(["enterShort", last, data[0]["time"], []])
+                        actions.append(["exitLong", []])
+                        actions.append(["enterShort", []])
 
                         # change index
                         self.low = last
@@ -272,8 +274,8 @@ class TrendFollowStrat(Strategy):
                 else:
                     if last > self.low + self.threshold:
                         # todo: down trend ends here
-                        actions.append(["exitShort", last, data[0]["time"], []])
-                        actions.append(["enterLong", last, data[0]["time"], []])
+                        actions.append(["exitShort", []])
+                        actions.append(["enterLong", []])
 
                         self.high = last
                         self.high_index = i
@@ -378,6 +380,81 @@ class FilteredTrendFollowStrat(Strategy):
         # </editor-fold>
 
 
+class SMACrossover(Strategy):
+
+    def __init__(self, short, long):
+
+        super().__init__(long)
+        self.name = "SMACrossoverStrat"
+
+        self.fast_sma = SMA(short)
+        self.slow_sma = SMA(long)
+
+    def initrun(self, data):
+        if len(data) < self.lookback:
+            raise AssertionError("too few values provided")
+
+        self.slow_sma.initialize(data)
+        self.fast_sma.initialize(data)
+
+    def run(self, data):
+
+        actions = []
+        prices = [d["price"] for d in data]
+
+        self.fast_sma(prices)
+        self.slow_sma(prices)
+
+        if cross_up(self.fast_sma, self.slow_sma):
+            actions.append(["exitShort", ()])
+            actions.append(["enterLong", ()])
+
+        if cross_down(self.fast_sma, self.slow_sma):
+            actions.append(["exitLong", ()])
+            actions.append(["enterShort", ()])
+
+        return actions
+
+
+class LPCrossover(Strategy):
+
+    def __init__(self, short, long):
+
+        super().__init__(0)
+        self.name = "LPCrossoverStrat"
+
+        self.fast_lp = Lowpass(short)
+        self.smooth_lp = Lowpass(long)
+
+    def initrun(self, data):
+        if len(data) < self.lookback:
+            raise AssertionError("too few values provided")
+
+        prices = [q["price"] for q in data]
+
+        self.smooth_lp.initialize(prices)
+        self.fast_lp.initialize(prices)
+
+    def run(self, data):
+
+        actions = []
+        prices = [d["price"] for d in data]
+
+        self.fast_lp(prices)
+        self.smooth_lp(prices)
+
+        if cross_up(self.fast_lp, self.smooth_lp):
+            actions.append(["exitShort", ()])
+            actions.append(["enterLong", ()])
+
+        if cross_down(self.fast_lp, self.smooth_lp):
+            actions.append(["exitLong", ()])
+            actions.append(["enterShort", ()])
+
+        return actions
+
+
+"""
 class IndicatorSignalStrat(Strategy):
 
     def __init__(self, entry_signal_long, exit_signal_long,
@@ -396,11 +473,18 @@ class IndicatorSignalStrat(Strategy):
         self.entry_signal_short = entry_signal_short
         self.exit_signal_short = exit_signal_short
 
+        self.counter = 0
+
+    def initrun(self, data):
+
+        prices = [d["price"] for d in data]
+        self.entry_signal_long.initialize(prices)
+        self.exit_signal_long.initialize(prices)
+        self.entry_signal_short.initialize(prices)
+        self.exit_signal_short.initialize(prices)
+
     def run(self, data):
-        """
-        :param data: n (price, time) pairs where n is lookback+1?
-        :return: list of actions to do, action is [action_type, price, time]
-        """
+        
         actions = []
 
         price = data[0]["price"]
@@ -418,30 +502,19 @@ class IndicatorSignalStrat(Strategy):
             actions.append(["enterLong", price, time, ()])
         if exit_long:
             actions.append(["exitLong", price, time, ()])
+
         if enter_short and not exit_short:
             actions.append(["enterShort", price, time, ()])
         if exit_short:
             actions.append(["exitShort", price, time, ()])
 
         return actions
-
-    def initrun(self, data):
-        """
-        should be executed only once -> after first batch of data comes in, e.g. to init certain params
-
-        :param data:
-        :return:
-        """
-        prices = [d["price"] for d in data]
-        self.entry_signal_long.initialize(prices)
-        self.exit_signal_long.initialize(prices)
-        self.entry_signal_short.initialize(prices)
-        self.exit_signal_short.initialize(prices)
-
+"""
 
 strat_dict = {"trend follow": TrendFollowStrat,
               "trend follow prob": TrendFollowStratWithProbModell,
               "market open spike": MarketOpenSpike,
               "filtered trend follow": FilteredTrendFollowStrat,
-              "indicator signal": IndicatorSignalStrat,
+              "SMACrossoverStrat": SMACrossover,
+              "LPCrossoverStrat": LPCrossover,
               }

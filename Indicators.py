@@ -8,15 +8,15 @@ class Indicator(ABC):
 
     def __init__(self):
         self.lookback = 0
-        self.value_history = list()
+        self.prior_values = []
 
     def __call__(self, prices):
-        self.assert_lookback(prices)
-        v = self.call(prices)
-        self.value_history.append(v)
+        self._assert_lookback(prices)
+        v = self._call(prices)
+        self.prior_values.append(v)
         return v
 
-    def assert_lookback(self, prices):
+    def _assert_lookback(self, prices):
         if self.lookback == 1 and type(prices) is not list:
             return
         if len(prices) < self.lookback:
@@ -24,7 +24,7 @@ class Indicator(ABC):
                                  .format(len(prices), self.lookback))
 
     @abstractmethod
-    def call(self, prices):
+    def _call(self, prices):
         """
         :param prices:
         :return: single value of the indicator based on "prices" and maybe indicator state
@@ -60,7 +60,7 @@ class TrendIndicator(Indicator):
 
         self.call_index = 0
 
-    def call(self, price):
+    def _call(self, price):
 
         uptrend = 1
         downtrend = -1
@@ -158,27 +158,34 @@ class SMA(Indicator):
         Indicator.__init__(self)
         self.lookback = period
         self._period = period
-        self._values = []
         self.name = "SMA {}".format(self._period)
 
     def initialize(self, prices):
-        self._values = [prices[0] for _ in range(self._period-1)]
-        self.value_history += self._values
+        pass
 
-    def call(self, prices):
-        self._values = self._values[1:] + [prices[-1]]
-        return sum(self._values)/len(self._values)
+    def _call(self, prices):
+        return sum(prices[-self.lookback:])/self._period
 
     @staticmethod
     def get_full(prices, *args, **kwargs):
-        if args:
+        lookback = args[0]
+        values = []
+        for i in range(len(prices)):
+            if i >= lookback:
+                ps = prices[i-lookback:i]
+                values.append(sum(ps)/lookback)
+            else:
+                values.append(prices[0])
+        return values
+
+        """if args:
             return np.concatenate(
                 (np.asarray([prices[0] for _ in range(args[0] - 1)]),
                  np.convolve(prices, np.repeat(1.0, args[0]) / args[0], 'valid')))
 
         return np.concatenate(
             (np.asarray([prices[0] for _ in range(kwargs["period"]-1)]),
-             np.convolve(prices, np.repeat(1.0, kwargs["period"]) / kwargs["period"], 'valid')))
+             np.convolve(prices, np.repeat(1.0, kwargs["period"]) / kwargs["period"], 'valid')))"""
 
 
 class Lowpass(Indicator):
@@ -190,13 +197,15 @@ class Lowpass(Indicator):
         self.sampling_freq = sampling_frequency  # change this if quotes are not per minute!
         self.lookback = 0
         self.values = []
+        self.call_counter = 0
 
-    def call(self, price):
-        for v in self.values:
-            yield v
+    def _call(self, price):
+        self.call_counter += 1
+        return self.values[self.call_counter-1]
 
     def initialize(self, prices):
         self.values = lowpass(prices, self.freq, sampling_frequency=self.sampling_freq)
+        self.call_counter = 0
 
     @staticmethod
     def get_full(prices, *args, **kwargs):
@@ -220,13 +229,15 @@ class Highpass(Indicator):
         self.sampling_freq = sampling_frequency  # change this if quotes are not per minute!
         self.lookback = 0
         self.values = []
+        self.call_counter = 0
 
-    def call(self, price):
-        for v in self.values:
-            yield v
+    def _call(self, price):
+        self.call_counter += 1
+        return self.values[self.call_counter - 1]
 
     def initialize(self, prices):
         self.values = lowpass(prices, self.freq, sampling_frequency=self.sampling_freq)
+        self.call_counter = 0
 
     @staticmethod
     def get_full(prices, *args, **kwargs):

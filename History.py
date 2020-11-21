@@ -218,7 +218,7 @@ class History:
             for elem in tmp:
                 to_add.append({"price": elem["meanPrice"], "time": elem["clearTime"]})
             to_add.reverse()
-            history_list += to_add
+            history_list += to_add[1:]
 
         self.create_csv_file(history_list=history_list, asset=asset, start_year=start_year, end_year=end_year, acc="M1")
 

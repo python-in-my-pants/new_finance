@@ -35,36 +35,58 @@ def func():
                                     x_label="Trends",
                                     y_labels=["heights", "lens", "momentum"])
 
-    def backtest():
+    def backtest_trend_follow():
+        t = Trader.HALF_RISK
+        h = 35
+
+        trend_follow = strat_dict["trend follow"](h)
+
+        bt1 = Backtester(trend_follow, dax_hist,
+                         use_balance=True, asset_data=AssetData.GER30,
+                         trader_data=t)#, sl_in_pips=119, ts_in_pips=106)
+        # bt1.deep_test(deepness=100)
+        #bt1.strat = strat_dict["trend follow"](bt1.optimize_strat_param("threshold", steps=2))
+        #bt1.sl_in_pips = bt1.optimize_sl(p=True)
+        #bt1.ts_in_pips = bt1.optimize_ts(p=True)
+
+        bt1.test()
+        """
+        bt1.plot_trades(crosshair=True, plot_trends=True, 
+                        #min_trend_h=h,indicators=[[1, TrendIndicator, h]],
+                        bar_amount=100000)
+        """
+        bt1.profit_with_tax(2016, 2020, sl_for_risk=False)
+
+    def backtest_ma_cross():
         t = Trader.DEFAULT
+        slow = 90
+        fast = 30
 
-        """entry_sig_l = TradeSignal(cross_up, [makeIndicator(SMA, 5), makeIndicator(SMA, 10)])
-        exit_sig_l = TradeSignal(cross_down, [makeIndicator(SMA, 5), makeIndicator(SMA, 10)])
-
-        entry_sig_s = TradeSignal(cross_down, [makeIndicator(SMA, 5), makeIndicator(SMA, 10)])
-        exit_sig_s = TradeSignal(cross_up, [makeIndicator(SMA, 5), makeIndicator(SMA, 10)])
-
-        lp_co = strat_dict["indicator signal"](entry_sig_l, exit_sig_l, entry_sig_s, exit_sig_s)  # 82"""
-
-        trend_follow = strat_dict["trend follow"](35)
+        trend_follow = strat_dict["SMACrossoverStrat"](fast, slow)
 
         bt1 = Backtester(trend_follow, dax_hist,
                          use_balance=True, asset_data=AssetData.GER30,
                          trader_data=t)#, ts_in_pips=45, sl_in_pips=45)
         # bt1.deep_test(deepness=100)
         bt1.test()
+        bt1.plot_trades(crosshair=False, plot_trends=False,
+                        indicators=[[0, SMA, fast], [0, SMA, slow]])
+        # bt2.profit_with_tax(2016, 2020, sl_for_risk=False)
 
-        """for i in range(5, 200, 5):
-            ts = anal.get_trends(dax_hist.hist, min_trend_h=i)
-            avg_h = avg([abs(t.height) for t in ts])
-            print(i, avg_h, avg_h/i)"""
+    def backtest_lp_cross():
+        t = Trader.DEFAULT
+        slow = 29
+        fast = 17
 
-        bt1.plot_trades(crosshair=False, plot_trends=True, min_trend_h=35,
-                        indicators=[[1, TrendIndicator, 35]])
+        trend_follow = strat_dict["LPCrossoverStrat"](fast, slow)
 
-        """,
-                        indicators=[[0, SMA, 5],
-                                    [0, SMA, 10]])"""
+        bt1 = Backtester(trend_follow, dax_hist,
+                         use_balance=True, asset_data=AssetData.GER30,
+                         trader_data=t)#, ts_in_pips=45, sl_in_pips=45)
+        # bt1.deep_test(deepness=100)
+        bt1.test()
+        bt1.plot_trades(crosshair=False, plot_trends=False,
+                        indicators=[[0, Lowpass, fast], [0, Lowpass, slow]], bar_amount=100000)
         # bt2.profit_with_tax(2016, 2020, sl_for_risk=False)
 
     def plot_some_indicators():
@@ -98,33 +120,19 @@ def func():
 
         trader = Trader.HALF_RISK
 
-        short_period = 50
-        long_period = 82
+        short_period = 5
+        long_period = 10
 
-        out_short = TradeSignal(cross_up,
-                                [makeIndicator(SMA, short_period),
-                                 makeIndicator(SMA, long_period)])
-        in_long = TradeSignal(cross_up,
-                              [makeIndicator(SMA, short_period),
-                               makeIndicator(SMA, long_period)])
-
-        out_long = TradeSignal(cross_down,
-                               [makeIndicator(SMA, short_period),
-                                makeIndicator(SMA, long_period)])
-        in_short = TradeSignal(cross_down,
-                               [makeIndicator(SMA, short_period),
-                                makeIndicator(SMA, long_period)])
-
-        signal_strat = strat_dict["indicator signal"](in_long, out_long, in_short, out_short)
+        signal_strat = strat_dict["SMACrossoverStrat"](short_period, long_period)
 
         bt2 = Backtester(signal_strat, dax_hist,
                          use_balance=False,
                          asset_data=AssetData.GER30, trader_data=trader)
 
-        bt2.test(use_sl_for_risk=False, full_print=True)
+        bt2.test(use_sl_for_risk=False, full_print=False)
         bt2.plot_trades(plot_trends=False,
                         indicators=[[0, SMA, short_period], [0, SMA, long_period]],
-                        bar_amount=1000, crosshair=False)
+                        bar_amount=100, crosshair=False)
 
     def test_artif_hist():
 
@@ -262,8 +270,8 @@ def func():
 
         anal.get_extern_trend_prediction_error(test_anal.trend_list, p=True, use_strict_mode=strict_mode)
 
-    #test_trend_forecasting_model([2017, 2018, 2019], 35, model_hist=dax_hist)
-    test_singal_strat()
+    # test_trend_forecasting_model([2017, 2018, 2019], 35, model_hist=dax_hist)
+    backtest_trend_follow()
 
 
 func()

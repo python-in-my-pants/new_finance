@@ -4,17 +4,12 @@ depending on whether their conditions are fulfilled.
 """
 
 
-def cross_up(indicator_a, indicator_b):
-
+def cross_up(indi_a, indi_b):
     """
     did "a" cross over "b" (so was lower, now is higher)?
-    :param indicator_a:
-    :param indicator_b:
-    :return: boolean indicating whether a cross happened
-             index of the cross
     """
 
-    def cu(a, b):
+    def inner(a, b):
         if type(a) is not list:
             if type(b) is not list:
                 return False, None
@@ -25,9 +20,12 @@ def cross_up(indicator_a, indicator_b):
                 return False, None
             b = [b for _ in range(len(a))]
 
+        if len(a) < 2 or len(b) < 2:
+            return False
+
         return a[-2] <= b[-2] and a[-1] > b[-1]
 
-    return cu(indicator_a.value_history[-2:], indicator_b.value_history[-2:])
+    return inner(indi_a.prior_values, indi_b.prior_values)
 
 
 def cross_down(indicator_a, indicator_b):
