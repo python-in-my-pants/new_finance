@@ -75,7 +75,7 @@ class ArtificialHistory:
     """
 
     @timeit
-    def __init__(self, real_hist, out_len=None, h=None, supress_print=True):
+    def __init__(self, real_hist, out_len=None, min_trend_h=None, supress_print=False):
 
         self.real_hist = real_hist
         self.asset_name = real_hist.asset_name
@@ -89,10 +89,10 @@ class ArtificialHistory:
             self.times = list(range(out_len))
 
         spread = vars(AssetData)[self.real_hist.asset_name][0]
-        if not h:
-            h = spread
+        if not min_trend_h:
+            min_trend_h = spread
 
-        analyer = Analyzer(real_hist, min_trend_h=h, realistic=False)
+        analyer = Analyzer(real_hist, min_trend_h=min_trend_h, realistic=False)
         self.real_trends = analyer.trend_list
         for i in range(len(self.real_trends) - 1):
             self.real_trends[i].next_trend = self.real_trends[i + 1]
@@ -130,6 +130,7 @@ class ArtificialHistory:
                       " Time remaining: ca.",
                       seconds_to_timestamp(avg_run_time*remaining_data_samples/avg_samples_per_loop))
                 start = time.time()
+                # todo why old here?
             self.trend_seq.append(self.get_likely_next_trend_old(self.trend_seq[-1]))
             trend_seq_data_len += self.trend_seq[-1].len
             i += 1

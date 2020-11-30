@@ -13,6 +13,18 @@ def func():
 
     dax_hist = History("GER30", 2016, use_cached=True)
 
+    def test_trend_predictor():
+
+        h = 35
+
+        anal = Analyzer(dax_hist, min_trend_h=h)
+        vali_anal = Analyzer(History("GER30", 2017), min_trend_h=h)
+        #arti_anal = Analyzer(ArtificialHistory(dax_hist, out_len=1000000, min_trend_h=h), min_trend_h=h)
+
+        anal.build_trend_predictor(7,
+                                   validation_data=vali_anal.trend_list,)
+                                   #substitute_training_data=arti_anal.trend_list)
+
     def autocor_trend_mom():
 
         anal16 = Analyzer(dax_hist, min_trend_h=5, realistic=False)
@@ -37,25 +49,23 @@ def func():
 
     def backtest_trend_follow():
         t = Trader.HALF_RISK
-        h = 35
+        h = 143
 
         trend_follow = strat_dict["trend follow"](h)
 
         bt1 = Backtester(trend_follow, dax_hist,
                          use_balance=True, asset_data=AssetData.GER30,
-                         trader_data=t)#, sl_in_pips=119, ts_in_pips=106)
+                         trader_data=t, sl_in_pips=119, ts_in_pips=106)
         # bt1.deep_test(deepness=100)
         #bt1.strat = strat_dict["trend follow"](bt1.optimize_strat_param("threshold", steps=2))
         #bt1.sl_in_pips = bt1.optimize_sl(p=True)
         #bt1.ts_in_pips = bt1.optimize_ts(p=True)
 
         bt1.test()
-        """
-        bt1.plot_trades(crosshair=True, plot_trends=True, 
-                        #min_trend_h=h,indicators=[[1, TrendIndicator, h]],
+        bt1.plot_trades(crosshair=False, plot_trends=True, min_trend_h=h,
+                        # indicators=[[1, TrendIndicator, h]],
                         bar_amount=100000)
-        """
-        bt1.profit_with_tax(2016, 2020, sl_for_risk=False)
+        #bt1.profit_with_tax(2016, 2019, sl_for_risk=False)
 
     def backtest_ma_cross():
         t = Trader.DEFAULT
@@ -88,6 +98,38 @@ def func():
         bt1.plot_trades(crosshair=False, plot_trends=False,
                         indicators=[[0, Lowpass, fast], [0, Lowpass, slow]], bar_amount=100000)
         # bt2.profit_with_tax(2016, 2020, sl_for_risk=False)
+
+    def backtest_trend_pred(h=35, mode="avg"):
+
+        t = Trader.DEFAULT
+
+        training_hist = ArtificialHistory(History("GER30", 2017), out_len=1000000, min_trend_h=h)
+        anal = Analyzer(training_hist, min_trend_h=h)
+        trend_pred = strat_dict["trend pred"](anal,
+                                              pred_mode=mode,
+                                              similarity_threshold=0.1,
+                                              pred_percentage_buffer=0.9,
+                                              pred_abs_buffer=25,
+                                              number_of_similar_trends_used=None,
+                                              min_trends_used=0)
+
+        bt1 = Backtester(trend_pred, dax_hist,
+                         use_balance=True, asset_data=AssetData.GER30,
+                         trader_data=t)#, sl_in_pips=114, ts_in_pips=106)
+
+
+        # bt1.deep_test(deepness=100)
+
+        # bt1.sl_in_pips = bt1.optimize_sl(p=True)
+        # bt1.ts_in_pips = bt1.optimize_ts(p=True)
+
+        bt1.test()
+        #bt1.print_trades()
+
+        # todo spread does not seem to adjust to positions size and is always 5€ per trade
+        bt1.plot_trades(crosshair=False, plot_trends=True, min_trend_h=h,
+                        # indicators=[[1, TrendIndicator, h]],
+                        bar_amount=10000)
 
     def plot_some_indicators():
         prices = dax_hist.prices
@@ -136,7 +178,7 @@ def func():
 
     def test_artif_hist():
 
-        arti = ArtificialHistory(dax_hist, h=40)
+        arti = ArtificialHistory(dax_hist, min_trend_h=40)
 
         Plotter.plot_general_same_y(list(range(len(dax_hist.prices))),
                                     [dax_hist.prices, arti.prices],
@@ -170,7 +212,7 @@ def func():
                 print("Diff len percentual: {:12.2f} % Diff height percentual: {:12.2f} %"
                       .format(delta_len_percentual*100, delta_h_percentual*100))
 
-            plen, ph = analyzer.expected_following_trend_from_trend(trend, similarity_threshold=0.5)
+            plen, ph = analyzer.predict_next_trend(trend, similarity_threshold=0.5)
 
             if not (plen == 0 and ph == 0):
                 print("\n                         Pred len: {:12.2f} Pred height: {:12.2f}".format(plen, ph))
@@ -241,7 +283,8 @@ def func():
                                      min_trend_h,
                                      model_years=None,
                                      model_hist=None,
-                                     strict_mode=False):
+                                     strict_mode=False,
+                                     mode="avg"):
 
         if not model_years and not model_hist:
             raise Exception("You must provide a model history or year for a model history!")
@@ -265,13 +308,19 @@ def func():
             h = History("GER30", *model_years)
             anal = Analyzer(h, min_trend_h=min_trend_h, realistic=False)
 
-        anal.get_intern_trend_prediction_error(p=True, use_strict_mode=strict_mode)
+        anal.get_intern_trend_prediction_error(p=True, use_strict_mode=strict_mode, mode=mode)
         test_anal = Analyzer(History("GER30", *test_years), min_trend_h=min_trend_h, realistic=False)
 
-        anal.get_extern_trend_prediction_error(test_anal.trend_list, p=True, use_strict_mode=strict_mode)
+        anal.get_extern_trend_prediction_error(test_anal.trend_list, p=True, use_strict_mode=strict_mode, mode=mode)
 
-    # test_trend_forecasting_model([2017, 2018, 2019], 35, model_hist=dax_hist)
-    backtest_trend_follow()
+    # test_trend_forecasting_model([2019], 35, model_years=[2016], strict_mode=True, mode="avg")
+    # backtest_trend_pred(146)
+
+    def test_audio():
+        anal = Analyzer(dax_hist, 80, fast=True)
+        anal.find_trade_indicating_pattern(min_pattern_len=2, max_pattern_len=5, p=True)
+
+    test_audio()
 
 
 func()

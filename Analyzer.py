@@ -13,6 +13,9 @@ from Utility import *
 import os
 import pickle
 import pandas as pd
+from Utility import *
+import sounddevice as sd
+from PricePattern import *
 
 
 class Trend:
@@ -198,12 +201,26 @@ class Analyzer:
         self.min_trend_h = min_trend_h
 
         if not fast:
+            print("Calculating volatility ...")
             self.volatility = self.get_hist_volatility(whole_timeframe=True)[0]
+            print("Finding trends ...")
             self.trend_list = self.get_trends(self.hist, min_trend_h=min_trend_h, realistic=realistic)
+            print("Getting similarity table ...")
             self.sim_table = self.get_sim_table(h=min_trend_h)
 
     def get_avg_following_trend_similarity(self):
         return avg([abs(trend.get_similarity(trend.next_trend)) for trend in self.trend_list[:-1]])
+
+    def play_prices_as_wav(self, gradient=None):
+
+        # normalize to [-1, 1] before using as input
+        prices = np.asarray(self.hist_obj.prices)
+        if gradient:
+            prices = self.derive_same_len(prices, gradient)
+        data = prices / np.max(np.abs(prices), axis=0)
+        print("Done normalizing price data ...")
+        sd.play(data, 44100, blocking=True)
+        print("Playback done")
 
     def make_sim_table(self, pr=False):
 
@@ -237,6 +254,7 @@ class Analyzer:
         sim_table_path = sim_table_path.replace(" ", "_").replace(".", "-").replace(":", "")
         try:
             with open(sim_table_path + ".pickle", "rb") as file:
+                print("Unpacking similarity table at", sim_table_path, "...")
                 sim_table = pickle.load(file)
                 if sim_table is None:
                     raise TypeError("sim table is none after reading from file")
@@ -245,10 +263,10 @@ class Analyzer:
             print("Creating sim table at", sim_table_path + ".pickle with", len(self.trend_list), "^2 entries")
             sim_table = self.make_sim_table()
 
-            if not os.path.exists(sim_table_path + ".pickle") and False:  # TODO ran out of input
+            if not os.path.exists(sim_table_path + ".pickle"):  # TODO ran out of input
                 try:
                     with open(sim_table_path + ".pickle", 'wb') as f:
-                        pickle.dump(self.sim_table, f)
+                        pickle.dump(sim_table, f)
                 except Exception as e:
                     print("Exception while writing similarity table to file")
                     print(e)
@@ -268,13 +286,13 @@ class Analyzer:
     def get_hist_volatility(self, timeframe="M", whole_timeframe=False):
         if not whole_timeframe:
             f = -1
-            if timeframe is "D":
+            if timeframe == "D":
                 f = 894
-            if timeframe is "W":
+            if timeframe == "W":
                 f = 4469
-            if timeframe is "M":
+            if timeframe == "M":
                 f = 17878
-            if timeframe is "Y":
+            if timeframe == "Y":
                 f = 214541
             if f < 0:
                 return
@@ -423,24 +441,328 @@ class Analyzer:
 
     # </editor-fold>
 
-    def find_trade_indicating_pattern(self, bin_size=3, min_pattern_len=3, max_pattern_len=8):
+    def get_trend_momentum_predictor(self, n, validation_data=None, substitute_training_data=None):
 
-        def round_to_bin_size(n):
-            rounded = np.round(n)
-            rest = rounded % bin_size
-            if rest >= bin_size:
-                return (rounded//bin_size) + bin_size
-            else:
-                return rounded // bin_size
+        timespan = self.hist_obj.timeframe
+        if substitute_training_data:
+            s = substitute_training_data[0].start_time
+            e = substitute_training_data[-1].end_time
+            timespan = s + "-" + e
 
-        rounded_prices = [round_to_bin_size(price) for price in self.hist_obj.prices]
+        filename = f'MLModels/NN_momentum_{str(n)}_{timespan}.pickle'
 
-        for pattern_len in range(min_pattern_len, max_pattern_len):
+        if os.path.exists(filename):
+            try:
+                with open(filename, "rb") as file:
+                    model = pickle.load(file)
+                    return model
+            except FileNotFoundError:
+                pass
+        else:
+            try:
+                with open(filename, 'wb') as f:
+                    model = self.build_trend_momentum_predictor(n, validation_data, substitute_training_data)
+                    pickle.dump(model, f)
+                    return model
+            except Exception as e:
+                print("Exception while writing model to file")
+                print(e)
 
-            for price_index in range(len(rounded_prices)):
+    def build_trend_momentum_predictor(self, n, validation_data=None, substitute_training_data=None):
 
-                selected_prices = rounded_prices[price_index:price_index+pattern_len]
-                normalized_selected_prices = [p-selected_prices[0] for p in selected_prices]
+        def make_trend_list(t, _n):
+            _l = [t]
+            for _ in range(_n-1):
+                _l.append(_l[-1].next_trend)
+            return [elem.momentum for elem in _l]
+
+        def get_nth_next_trend_len(t, _n):
+            tmp = t
+            for _ in range(_n):
+                tmp = t.next_trend
+            return tmp.len
+
+        if not substitute_training_data:
+            training_data = self.trend_list
+        else:
+            training_data = substitute_training_data
+
+        neurons_per_layer = 50
+        layers_in_model = 3
+        dropout_rate = 0.2
+        epochs = 500
+
+        # define the dataset
+        x = np.asarray([make_trend_list(t, n) for t in training_data[:-n]])
+        y = np.asarray([get_nth_next_trend_len(t, n) for t in training_data[:-n]])
+
+        # reshape arrays into into rows and cols
+        x = x.reshape((len(x), n))
+        y = y.reshape((len(y), 1))
+
+        # design the neural network model
+        model = Sequential()
+        model.add(Dense(neurons_per_layer, input_dim=n, activation='relu', kernel_initializer='he_uniform'))
+
+        for _ in range(layers_in_model):
+            model.add(Dense(neurons_per_layer, activation='relu', kernel_initializer='he_uniform'))
+            model.add(Dropout(dropout_rate))
+
+        model.add(Dense(1))
+
+        # define the loss fu'nction and optimization algorithm
+        model.compile(loss='mse', optimizer='adam')
+
+        print("Training ...")
+        # ft the model on the training dataset
+        model.fit(x, y, epochs=epochs, batch_size=10, verbose=1)
+
+        # make predictions for the input data
+        yhat = model.predict(x)
+
+        x_plot = x[:, n-1]
+        y_plot = y
+        yhat_plot = yhat
+
+        # report model error
+        print('Intern MSE: %.3f' % mean_squared_error(y_plot, yhat_plot))
+
+        if validation_data:
+            validation_x = np.asarray([make_trend_list(t, n) for t in validation_data[:-n]])
+            validation_y = np.asarray([get_nth_next_trend_len(t, n) for t in validation_data[:-n]])
+
+            validation_yhat = model.predict(validation_x)
+
+            print('Extern MSE: %.3f' % mean_squared_error(validation_y, validation_yhat))
+
+        plt.rc('figure', facecolor="#333333", edgecolor="#333333")
+        plt.rc('axes', facecolor="#353535", edgecolor="#000000")
+        plt.rc('lines', color="#393939")
+        plt.rc('grid', color="#121212")
+
+        plt.plot(range(len(y_plot)), y_plot, label='Actual')
+        plt.plot(range(len(yhat_plot)), yhat_plot, label='Predicted')
+
+        if validation_data:
+            plt.plot(range(len(y_plot),
+                           len(y_plot)+len(validation_y)),
+                     validation_y, label='Validation Actual', color="green")
+            plt.plot(range(len(yhat_plot),
+                           len(yhat_plot)+len(validation_yhat)),
+                     validation_yhat, label='validation Predicted', color="yellow")
+
+        plt.xlabel('Trend number')
+        plt.ylabel('Predicted next trend length')
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+        return model
+
+    def build_trend_len_height_predictor(self, n, validation_data=None, substitute_training_data=None):
+
+        from sklearn.preprocessing import MinMaxScaler
+        from sklearn.metrics import mean_squared_error
+        from tensorflow.keras import Sequential
+        from keras.layers import Dense
+        from keras.layers import Dropout
+
+        def make_trend_list(t, _n):
+            _l = [t]
+            for _ in range(_n-1):
+                _l.append(_l[-1].next_trend)
+            return flatten([[elem.len, elem.height] for elem in _l])
+
+        def get_nth_next_trend_len(t, _n):
+            tmp = t
+            for _ in range(_n):
+                tmp = t.next_trend
+            return tmp.len
+
+        if not substitute_training_data:
+            training_data = self.trend_list
+        else:
+            training_data = substitute_training_data
+
+        neurons_per_layer = 50
+        layers_in_model = 3
+        dropout_rate = 0.2
+        epochs = 500
+
+        # define the dataset
+        x = np.asarray([make_trend_list(t, n) for t in training_data[:-n]])
+        y = np.asarray([get_nth_next_trend_len(t, n) for t in training_data[:-n]])
+
+        # reshape arrays into into rows and cols
+        x = x.reshape((len(x), n))
+        y = y.reshape((len(y), 1))
+
+        # design the neural network model
+        model = Sequential()
+        model.add(Dense(neurons_per_layer, input_dim=n, activation='relu', kernel_initializer='he_uniform'))
+
+        for _ in range(layers_in_model):
+            model.add(Dense(neurons_per_layer, activation='relu', kernel_initializer='he_uniform'))
+            model.add(Dropout(dropout_rate))
+
+        model.add(Dense(1))
+
+        # define the loss fu'nction and optimization algorithm
+        model.compile(loss='mse', optimizer='adam')
+
+        print("Training ...")
+        # ft the model on the training dataset
+        model.fit(x, y, epochs=epochs, batch_size=10, verbose=1)
+
+        # make predictions for the input data
+        yhat = model.predict(x)
+
+        x_plot = x[:, n-1]
+        y_plot = y
+        yhat_plot = yhat
+
+        # report model error
+        print('Intern MSE: %.3f' % mean_squared_error(y_plot, yhat_plot))
+
+        if validation_data:
+            validation_x = np.asarray([make_trend_list(t, n) for t in validation_data[:-n]])
+            validation_y = np.asarray([get_nth_next_trend_len(t, n) for t in validation_data[:-n]])
+
+            validation_yhat = model.predict(validation_x)
+
+            print('Extern MSE: %.3f' % mean_squared_error(validation_y, validation_yhat))
+
+        plt.rc('figure', facecolor="#333333", edgecolor="#333333")
+        plt.rc('axes', facecolor="#353535", edgecolor="#000000")
+        plt.rc('lines', color="#393939")
+        plt.rc('grid', color="#121212")
+
+        plt.plot(range(len(y_plot)), y_plot, label='Actual')
+        plt.plot(range(len(yhat_plot)), yhat_plot, label='Predicted')
+
+        if validation_data:
+            plt.plot(range(len(y_plot),
+                           len(y_plot)+len(validation_y)),
+                     validation_y, label='Validation Actual', color="green")
+            plt.plot(range(len(yhat_plot),
+                           len(yhat_plot)+len(validation_yhat)),
+                     validation_yhat, label='validation Predicted', color="yellow")
+
+        plt.xlabel('Trend number')
+        plt.ylabel('Predicted next trend length')
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+        return model
+
+    # todo
+    def find_trade_indicating_pattern(self,
+                                      min_pattern_len=2,
+                                      max_pattern_len=10,
+                                      significance=0.7,
+                                      min_occurrences=10,
+                                      p=False):
+
+        # TODO kinda faulty but will do for now ...
+        def cantor_traverse_matrix(mat, n):
+            to_return = []
+
+            # Initialize indexes of element to be printed next
+            i = 0
+            j = 0
+            k = 0
+            # Direction is initially from down to up
+            isup = True
+
+            # Traverse the matrix till all elements get traversed
+            while k < n * n:
+                # If isUp = True then traverse from downward
+                # to upward
+                if isup:
+                    while i >= 0 and j < n:
+                        to_return.append(mat[i][j])
+                        k += 1
+                        j += 1
+                        i -= 1
+
+                    # Set i and j according to direction
+                    if i < 0 and j <= n - 1:
+                        i = 0
+                    if j == n:
+                        i = i + 2
+                        j -= 1
+
+                # If isUp = 0 then traverse up to down
+                else:
+                    while j >= 0 and i < n:
+                        to_return.append(mat[i][j])
+                        k += 1
+                        i += 1
+                        j -= 1
+
+                    # Set i and j according to direction
+                    if j < 0 and i <= n - 1:
+                        j = 0
+                    if i == n:
+                        j = j + 2
+                        i -= 1
+
+                # Revert the isUp to change the direction
+                isup = not isup
+
+            return to_return
+
+        start_time = time.time()
+        index_matrix = np.asarray([(i, j)
+                                   for i in range(min_pattern_len, max_pattern_len + 1)
+                                   for j in range(min_pattern_len, max_pattern_len + 1)])
+        index_matrix = index_matrix.reshape(max_pattern_len - 1, max_pattern_len - 1, -1)
+        indices = cantor_traverse_matrix(index_matrix, max_pattern_len-min_pattern_len+1)
+
+        significant_pattern = []  # holds tuples (pattern, percentage)
+
+        prices = self.hist_obj.prices
+
+        for index in indices:
+
+            cause_len, eff_len = index
+
+            if p:
+                print(f'Checking cause length: {cause_len}, effect length: {eff_len}')
+
+            for pattern_selection_index in range(len(prices)-cause_len-eff_len):
+
+                cause = prices[pattern_selection_index:cause_len+pattern_selection_index]
+                effect = prices[pattern_selection_index+cause_len:pattern_selection_index+cause_len+eff_len]
+                pattern = PricePattern(cause, effect)
+
+                if p and pattern_selection_index % 30 == 0:
+                    percent_done = 100*pattern_selection_index/(len(prices)-cause_len-eff_len)
+                    seconds_passed = time.time()-start_time
+                    time_passed = seconds_to_timestamp(seconds_passed)
+                    time_left = seconds_to_timestamp(seconds_passed*100/(percent_done+0.000003))
+                    print(f'{str(time_passed)} '
+                          f'Checking pattern {pattern_selection_index+1} out of {len(prices)-cause_len-eff_len}'
+                          f'\t\t\t{str(percent_done)}% done\n'
+                          f'    ~{time_left} remaining, {len(significant_pattern)} pattern found so far\n')
+
+                for iteration_index in range(len(prices)-pattern.length):
+                    significant, percentage, occs = \
+                        pattern.check_seq(prices[iteration_index:iteration_index+pattern.length],
+                                          p=p,
+                                          significance=significance,
+                                          min_occs=min_occurrences)
+                    if significant:
+                        if p:
+                            print("Significant pattern found! Significance {} Occurences: {}"
+                                  .format(int(percentage*100), occs))
+                        significant_pattern.append((pattern, percentage, occs))
+
+        if p:
+            print(significant_pattern)
+
+        return significant_pattern
 
     def trend_len_height_cross_correlate(self):
 
@@ -456,29 +778,6 @@ class Analyzer:
                                     [l_norm, h_norm, c_norm],
                                     x_label="Trend #",
                                     y_labels=["Lengths", "Heights", "Cross correlation"])
-
-    def autocorrelate_old(self, data):
-        data_dict = {
-            "trend len": [trend.len for trend in self.trend_list],
-            "trend height": [trend.height for trend in self.trend_list],
-            "trend abs mom": [abs(trend.momentum) for trend in self.trend_list],
-        }
-
-        if data in list(data_dict.keys()):
-            signal = data_dict[data]
-            x_label = data
-        else:
-            signal = data
-            x_label = "Data"
-
-        signal -= mean(signal)
-
-        autocorrelated = correlate(signal, signal, mode="full")
-        autocorrelated_norm = \
-            autocorrelated[int(np.rint(autocorrelated.size/2)-1):] / np.var(autocorrelated)
-
-        Plotter.plot_general(list(range(len(signal))), autocorrelated_norm)
-        #Plotter.plot_general(list(range(len(autocorrelated))), autocorrelated)
 
     def get_win_loss_rythm(self, p=True):
 
@@ -559,13 +858,13 @@ class Analyzer:
             self.sim = s
             self.trend = u
 
-    def get_similar_trends(self, base_trend, n=None, similarity_threshold=0):
+    def get_similar_trends(self, base_trend, n=None, similarity_threshold=0, m=None):
 
         if base_trend is None:
             raise TypeError("Base trend is none")
 
         if self.sim_table is None:
-            raise TypeError("Sim table is None")
+            self.sim_table = self.make_sim_table()
 
         if similarity_threshold < 0:
             similarity_threshold = 0
@@ -588,30 +887,63 @@ class Analyzer:
             if n and len(containers) >= n:
                 break
 
+        if m and len(containers) < m:
+            return [], 0
+
         containers.sort(key=lambda x: x.sim, reverse=True)
 
         return containers, summed_similarity
 
-    def expected_following_trend_from_trend(self, base_trend,
-                                            number_of_similar_trends_used=None, similarity_threshold=0):
+    def predict_next_trend(self, base_trend,
+                           number_of_similar_trends_used=None, similarity_threshold=0,
+                           mode="avg", p=False, min_trends_used=None):
         """
 
         :param base_trend: current trend, preceding the one to predict
         :param number_of_similar_trends_used:
         :param similarity_threshold: between -1 and 1, minimum similarity for the considered trends
+        :param mode average or median for deriving expected len from similar following trends
         :return: expected length and height of the trend following the given one
         """
 
-        containers, summed_similarity = self.get_similar_trends(base_trend,
-                                                                number_of_similar_trends_used,
-                                                                similarity_threshold)
+        modes = ("avg", "med")
 
-        expected_len = sum([con.trend.next_trend.len * (con.sim / summed_similarity) for con in containers])
-        expected_height = sum([con.trend.next_trend.height * (con.sim / summed_similarity) for con in containers])
+        if mode not in modes:
+            print("Invalid mode provided, switching to average. Available modes are:", modes)
+            mode = "avg"
+
+        containers, summed_similarity = self.get_similar_trends(
+            base_trend=base_trend,
+            n=number_of_similar_trends_used,
+            similarity_threshold=similarity_threshold,
+            m=min_trends_used)
+
+        if not containers:
+            # could not find any similar trends
+            return 0, 0
+
+        if mode == "avg":
+            expected_len = sum([con.trend.next_trend.len * (con.sim / summed_similarity) for con in containers])
+            expected_height = sum([con.trend.next_trend.height * (con.sim / summed_similarity) for con in containers])
+
+            if p:
+                print("\nPredicting using trends:\n")
+                for c in containers:
+                    print("{:.6f} / {:.6f} = {:.6f} ==> {:.6f} * {:.6f} = {:.6f}".format(
+                        c.sim, summed_similarity, c.sim/summed_similarity,
+                        c.sim/summed_similarity, c.trend.next_trend.height, c.trend.next_trend.height*c.sim/summed_similarity
+                    ))
+
+        if mode == "med":
+            similarities = [con.sim for con in containers]
+            median_similar_trend = [con.trend.next_trend for con in containers][weigted_median_index(similarities)]
+
+            expected_len = median_similar_trend.len
+            expected_height = median_similar_trend.height
 
         return expected_len, expected_height
 
-    def get_intern_trend_prediction_error(self, sim_threshold=0, p=False, use_strict_mode=True):
+    def get_intern_trend_prediction_error(self, sim_threshold=0, p=False, use_strict_mode=True, mode="avg"):
         """
         Plot trends in space (len vs height). Plot predicted next trend blue and connect them with a blue line.
         Connect following trend to base trend with a green line.
@@ -627,7 +959,7 @@ class Analyzer:
         for trend in self.trend_list[:-1]:
 
             predicted_len, predicted_height = \
-                self.expected_following_trend_from_trend(trend, similarity_threshold=sim_threshold)
+                self.predict_next_trend(trend, similarity_threshold=sim_threshold, mode=mode)
 
             if not (predicted_len == 0 and predicted_height == 0):
 
@@ -652,7 +984,11 @@ class Analyzer:
             "Avg len error": avg(len_errors),
             "Avg relative len error": str(avg(rel_len_errors)*100)+"%",
             "Avg height error": avg(height_errors),
-            "Avg relative height error": str(avg(rel_height_errors)*100)+"%"
+            "Avg relative height error": str(avg(rel_height_errors)*100)+"%",
+            "Med height error": my_median(height_errors),
+            "Med relative height error": str(my_median(rel_height_errors) * 100) + "%",
+            "Med trend height": my_median([abs(t.height) for t in self.trend_list]),
+            "Avg trend height": avg([abs(t.height) for t in self.trend_list]),
         }
 
         if p:
@@ -661,16 +997,11 @@ class Analyzer:
             pd.set_option("display.max_rows", None, "display.max_columns", None)
             pd.set_option('display.width', 1000)
 
-            print(df, "\n")
+            print("\n", df.transpose(), "\n")
 
         return results
 
-    def get_extern_trend_prediction_error(self, trends, sim_threshold=0, p=False, use_strict_mode=True):
-        """
-        Plot trends in space (len vs height). Plot predicted next trend blue and connect them with a blue line.
-        Connect following trend to base trend with a green line.
-        :return: None
-        """
+    def get_extern_trend_prediction_error(self, trends, sim_threshold=0, p=False, use_strict_mode=True, mode="avg"):
 
         len_errors = list()
         height_errors = list()
@@ -681,7 +1012,7 @@ class Analyzer:
         for trend in trends[:-1]:
 
             predicted_len, predicted_height = \
-                self.expected_following_trend_from_trend(trend, similarity_threshold=sim_threshold)
+                self.predict_next_trend(trend, similarity_threshold=sim_threshold, mode=mode)
 
             if not (predicted_len == 0 and predicted_height == 0):
 
@@ -706,7 +1037,11 @@ class Analyzer:
             "Avg len error": avg(len_errors),
             "Avg relative len error": str(avg(rel_len_errors)*100)+"%",
             "Avg height error": avg(height_errors),
-            "Avg relative height error": str(avg(rel_height_errors)*100)+"%"
+            "Avg relative height error": str(avg(rel_height_errors)*100)+"%",
+            "Med height error": my_median(height_errors),
+            "Med relative height error": str(my_median(rel_height_errors) * 100) + "%",
+            "Med trend height": my_median([abs(t.height) for t in trends]),
+            "Avg trend height": avg([abs(t.height) for t in trends]),
         }
 
         if p:
@@ -715,10 +1050,9 @@ class Analyzer:
             pd.set_option("display.max_rows", None, "display.max_columns", None)
             pd.set_option('display.width', 1000)
 
-            print(df)
+            print("\n", df.transpose(), "\n")
 
         return results
-
 
     # <editor-fold desc="Probability getter">
     def GTEP_len(self, curr_len, max_len=500):
@@ -992,8 +1326,8 @@ class Plotter:
         for i, trend in enumerate(trends_used):
 
             predicted_len, predicted_height = \
-                self.analyzer.expected_following_trend_from_trend(trend,
-                                                                  similarity_threshold=sim_threshold)
+                self.analyzer.predict_next_trend(trend,
+                                                 similarity_threshold=sim_threshold)
 
             # plot base trend
             ax1.scatter(trend.len, trend.height, c="black", marker=".")

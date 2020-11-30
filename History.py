@@ -94,6 +94,7 @@ class History:
 
         if use_cached:
             try:
+                print("Loading cached history from", folder_name, file_name)
                 file = open(folder_name + file_name + ".pickle", "rb")
                 loaded_history_obj = pickle.load(file)
                 self.hist = loaded_history_obj.hist
@@ -114,6 +115,7 @@ class History:
         if accuracy == "M1":
 
             try:
+                print("Loading history from csv file at", folder_name, file_name)
                 file = open(folder_name + full_file_name, "r")
                 lines = file.readlines()
                 file.close()

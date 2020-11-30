@@ -4,6 +4,7 @@ from History import History
 import datetime
 from Indicators import *
 from Triggers import *
+from Analyzer import Trend
 
 
 class Strategy(ABC):
@@ -168,10 +169,11 @@ class TrendFollowStratWithProbModell(Strategy):
 # maybe combine with typical trend len & height
 
 
+# todo
 class MarketOpenSpike(Strategy):
 
     # todo strat: always buy with tight trailing stop just before market opening (08:50 or 08:55) and use first swing,
-    #  if it is negative, immideately reverse your position, if again negative go out ...... run some analysis to back
+    #  if it is negative, immediately reverse your position, if again negative go out ...... run some analysis to back
     #  up on periodic momentum spikes
 
     def __init__(self):
@@ -285,7 +287,12 @@ class TrendFollowStrat(Strategy):
         # </editor-fold>
 
 
+# done
 class FilteredTrendFollowStrat(Strategy):
+
+    """
+    Trend follow strategy, but prices are run through filter before we look for trends
+    """
 
     def __init__(self, threshold, filter_class, *filter_args):
         super().__init__(lookback=100000000)  # must be >= length of test period quotes
@@ -380,6 +387,213 @@ class FilteredTrendFollowStrat(Strategy):
         # </editor-fold>
 
 
+# todo
+class TrendPredictionStrat(Strategy):
+
+    """
+    IDEA:
+
+    only enter on a trend start if
+     - its predicted height * pred_percentage_buffer >= min_trend_h (+ additional_abs_buffer)
+     - its predicted height - pred_abs_buffer  >= min_trend_h (+ additional_abs_buffer)
+
+     exit when
+      - trend_h >= predicted height * pred_percentage_buffer OR
+      - trend_h >= predicted height - pred_abs_buffer is reached
+
+    """
+
+    def __init__(self, analyzer,
+                 pred_percentage_buffer=0.7, pred_abs_buffer=25, additional_abs_buffer=5,
+                 pred_mode="avg", number_of_similar_trends_used=None, similarity_threshold=0, min_trends_used=None):
+        super().__init__(lookback=1)
+
+        print("\nWarning! Used analyzer object should not be based on the same history as the backtest!")
+
+        self.uptrend = -1
+        self.high = self.low = self.begin = 0
+        self.high_index = self.low_index = self.break_index = 0
+
+        self.hist = []
+        self.threshold = analyzer.min_trend_h
+        self.anal = analyzer
+        self.pred_mode = pred_mode
+        self.number_of_similar_trends_used = number_of_similar_trends_used
+        self.similarity_threshold = similarity_threshold
+        self.min_trends_used = min_trends_used
+
+        self.pred_percentage_buffer = pred_percentage_buffer
+        self.pred_abs_buffer = pred_abs_buffer
+
+        self.entry_pred_threshold = self.threshold + additional_abs_buffer
+
+        self.predicted_h = None
+
+        self.initializing = True
+        self.name = "TrendPredictionStrat"
+        self.parameter_names = ["pred_percentage_buffer",
+                                "pred_abs_buffer",
+                                "additional_abs_buffer"]  # everything that can be used to init the strat
+
+    def initrun(self, data):
+
+        """
+        wait for first trend (up or down) but don't act on it,
+        enter when first trend ends and make the kind of
+        your entry (long/short) dependent on the former trend
+
+        :param data:
+        :return:
+        """
+
+        self.hist = []
+        self.hist_prices = []
+        self.initializing = True
+        self.high = self.low = self.begin = data[0]["price"]
+
+    def run(self, data):
+
+        debug = True
+        self.hist.append(data[0])
+        i = len(self.hist) - 1
+        last = data[0]["price"]
+
+        actions = []
+
+        if self.initializing:
+
+            if last > self.high:
+                self.high = last
+            if last < self.low:
+                self.low = last
+
+            if last > self.low + self.threshold:
+                self.uptrend = True
+                self.initializing = False
+            if last < self.high - self.threshold:
+                self.uptrend = False
+                self.initializing = False
+
+        # <editor-fold desc="strategy part">
+        else:
+
+            if self.uptrend:
+
+                # exit condition long
+                if self.predicted_h:
+
+                    true_uptrend_start = self.begin - self.threshold
+                    current_trend_h = last - true_uptrend_start
+
+                    if current_trend_h >= self.predicted_h * self.pred_percentage_buffer or \
+                       current_trend_h >= self.predicted_h - self.pred_abs_buffer:
+
+                        actions.append(["exitLong", []])
+
+                ###############################################################################
+
+                if last > self.high:
+                    self.high = last
+                    self.high_index = i
+                else:
+                    if last < self.high - self.threshold:
+                        # count last peak as end of high trend and as start of low trend
+
+                        # todo: up trend ended min_trend_h bars ago,
+                        #       down trend started min_threshold bars ago
+
+                        # if not already done, exit long trends now
+                        actions.append(["exitLong", []])
+
+                        past_uptrend = Trend(self.hist[self.low_index:self.high_index + 1])
+                        if debug:
+                            print("\n---Past uptrend was:", past_uptrend.height)
+                        _, pred_h = self.anal.predict_next_trend(past_uptrend,
+                                                                 mode=self.pred_mode,
+                                                                 number_of_similar_trends_used=self.number_of_similar_trends_used,
+                                                                 similarity_threshold=self.similarity_threshold,
+                                                                 min_trends_used=self.min_trends_used,
+                                                                 p=debug)
+                        if pred_h:
+                            self.predicted_h = pred_h
+                            if debug:
+                                #print("    Predicted down height:", pred_h)
+                                print("\n---Predicted downtrend height:", pred_h)
+
+                        if pred_h and \
+                           abs(self.predicted_h) * self.pred_percentage_buffer >= self.entry_pred_threshold and \
+                           abs(self.predicted_h) - self.pred_abs_buffer >= self.entry_pred_threshold:
+
+                            actions.append(["enterShort", []])
+
+                        # change index
+                        if debug:
+                            #print("Actual up height:      ", last - self.begin + 2*self.threshold)
+                            pass
+                        self.low = last
+                        self.low_index = i
+                        self.uptrend = False
+                        self.begin = last
+            else:
+
+                # exit condition short
+                if self.predicted_h:
+
+                    true_downtrend_start = self.begin + self.threshold
+                    current_trend_h = true_downtrend_start - last
+
+                    if current_trend_h <= self.predicted_h * self.pred_percentage_buffer or \
+                       current_trend_h <= self.predicted_h + self.pred_abs_buffer:
+                        actions.append(["exitShort", []])
+
+                ###############################################################################
+
+                if last < self.low:
+                    self.low = last
+                    self.low_index = i
+                else:
+                    if last > self.low + self.threshold:
+
+                        # todo: down trend ends here
+
+                        actions.append(["exitShort", []])
+
+                        # entry conditions for long trades
+                        past_downtrend = Trend(self.hist[self.high_index:self.low_index + 1])
+                        if debug:
+                            print("\n---Past downtrend was:", past_downtrend.height)
+                        _, pred_h = self.anal.predict_next_trend(past_downtrend,
+                                                                 mode=self.pred_mode,
+                                                                 number_of_similar_trends_used=self.number_of_similar_trends_used,
+                                                                 similarity_threshold=self.similarity_threshold,
+                                                                 min_trends_used=self.min_trends_used,
+                                                                 p=debug)
+
+                        if pred_h:
+                            self.predicted_h = pred_h
+                            if debug:
+                                #print("Predicted up height:   ", pred_h)
+                                print("\n---Predicted uptrend height:", pred_h)
+
+                        if pred_h and \
+                           abs(self.predicted_h) * self.pred_percentage_buffer >= self.entry_pred_threshold and \
+                           abs(self.predicted_h) - self.pred_abs_buffer >= self.entry_pred_threshold:
+
+                            actions.append(["enterLong", []])
+
+                        if debug:
+                            #print("    Actual down height:    ", last - self.begin - 2*self.threshold)
+                            pass
+                        self.high = last
+                        self.high_index = i
+                        self.uptrend = True
+                        self.begin = last
+
+            return actions
+        # </editor-fold>
+
+
+# done
 class SMACrossover(Strategy):
 
     def __init__(self, short, long):
@@ -416,6 +630,7 @@ class SMACrossover(Strategy):
         return actions
 
 
+# done
 class LPCrossover(Strategy):
 
     def __init__(self, short, long):
@@ -517,4 +732,5 @@ strat_dict = {"trend follow": TrendFollowStrat,
               "filtered trend follow": FilteredTrendFollowStrat,
               "SMACrossoverStrat": SMACrossover,
               "LPCrossoverStrat": LPCrossover,
+              "trend pred": TrendPredictionStrat,
               }

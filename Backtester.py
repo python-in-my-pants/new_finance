@@ -251,7 +251,7 @@ class Backtester:
 
         for i in range(deepness-1):
             print("\nStarting test #{}".format(i+2))
-            self.hist_obj = ArtificialHistory(og_hist, h=min_trend_h)
+            self.hist_obj = ArtificialHistory(og_hist, min_trend_h=min_trend_h)
             results.append(self.test(p, full_print, single_step, use_sl_for_risk, only_long, only_short, fast))
 
         print("Average profit: ", avg(results))
@@ -522,7 +522,7 @@ class Backtester:
         for t in self.closed_trades:
             print(t)
             s += t.profit
-            print("Balance: ", s, "\n")
+            print("Balance: {:.2f}\n".format(s))
 
     def plot_trades(self, min_trend_h=5, realistic=False, plot_trends=True, indicators=None,
                     bar_amount=10000, start_bar=0, crosshair=True):
@@ -626,6 +626,12 @@ class Backtester:
             ax1.plot(trade_x_values[i],
                      trade_y_values[i],
                      color=("green" if trades[i].direction == 1 else "#8B0000"))
+            ax1.annotate("{:.3f}".format(trades[i].profit),  # this is the text
+                         (trade_x_values[i][1], trade_y_values[i][1]),  # this is the point to label
+                         textcoords="offset points",  # how to position the text
+                         xytext=(0, 10),  # distance from text to points (x,y)
+                         ha='center',
+                         color="#00FF00" if trades[i].profit >= 0 else "red")  # horizontal alignment can be left, right or center
 
         # -----------------------
 
@@ -649,8 +655,9 @@ class Backtester:
         """
 
         plt.xticks(rotation=90)
+
         plt.tight_layout()
-        fig.subplots_adjust(bottom=0.23)
+
         plt.grid(True)
         if indicators:
             plt.legend()
