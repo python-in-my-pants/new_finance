@@ -17,6 +17,7 @@ class PricePattern:
 
     def fits(self, prices):
 
+        #print(f"Checking fit for {prices}")
         if self.interpolation:
             # TODO
             #  set splitting point in relation to relation of lengths of cause and effect
@@ -28,6 +29,7 @@ class PricePattern:
             else:
                 if self.cause.fits(prices[:self.cause.length]):
                     if self.effect.fits(prices[-self.effect.length:]):
+                        #print("fit")
                         return True, True
                     return True, False
                 return False, False
@@ -41,13 +43,13 @@ class PricePattern:
         following_effects = 0
 
         for i in range(len(seq)-self.length+1):
-            cause_found, effect_found = self.fits(seq[i:self.length])
+            cause_found, effect_found = self.fits(seq[i:i+self.length])
             if cause_found:
                 causes += 1
             if effect_found:
                 following_effects += 1
 
-        sigificant = (following_effects / causes >= significance if causes else False) and following_effects > min_occs
+        sigificant = (following_effects / causes >= significance if causes else False) and following_effects >= min_occs
 
         if p and sigificant:
             spots = len(seq) - self.length + 1
@@ -61,7 +63,7 @@ class PricePattern:
         return sigificant, (following_effects/causes if causes else 0), following_effects
 
     def __str__(self):
-        return "Cause: " + str(self.cause) + "\nEffect: " + str(self.effect)
+        return "\t\tCause: " + str(self.cause) + "\n\t\tEffect: " + str(self.effect)
 
 
 class PriceSequence:
@@ -71,7 +73,7 @@ class PriceSequence:
         self.prices = data
         self.length = len(data)
         # half of the min gradient
-        self.tolerance = abs(min([data[i+1]-data[i] for i in range(len(data)-1)])/2)
+        self.tolerance = abs(min([data[i+1]-data[i] for i in range(len(data)-1)])) / 2
 
     def fits(self, other_data) -> bool:
 
@@ -99,4 +101,4 @@ class PriceSequence:
                 return True
 
     def __str__(self):
-        return f'(Length: {self.length}, Prices: {self.prices})'
+        return f'(Length: {self.length}, Tolerance: {self.tolerance}, Prices: {self.prices})'

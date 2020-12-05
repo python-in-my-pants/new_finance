@@ -97,6 +97,7 @@ class Backtester:
                 # an event happened, because we need to check for it first
                 price = prices[index+1]
                 time = times[index+1]
+                print(index) if index % 10000 == 0 else None
 
                 # test SL and TP and TS for all open trades
                 for trade in self.open_long_trades + self.open_short_trades:

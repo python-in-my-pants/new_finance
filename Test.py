@@ -49,21 +49,21 @@ def func():
 
     def backtest_trend_follow():
         t = Trader.HALF_RISK
-        h = 143
+        h = makeIndicator(ATR, 30)
 
-        trend_follow = strat_dict["trend follow"](h)
+        trend_follow = strat_dict["trend follow"](threshold_func=h)
 
         bt1 = Backtester(trend_follow, dax_hist,
                          use_balance=True, asset_data=AssetData.GER30,
-                         trader_data=t, sl_in_pips=119, ts_in_pips=106)
+                         trader_data=t)#, sl_in_pips=119, ts_in_pips=106)
         # bt1.deep_test(deepness=100)
         #bt1.strat = strat_dict["trend follow"](bt1.optimize_strat_param("threshold", steps=2))
         #bt1.sl_in_pips = bt1.optimize_sl(p=True)
         #bt1.ts_in_pips = bt1.optimize_ts(p=True)
 
         bt1.test()
-        bt1.plot_trades(crosshair=False, plot_trends=True, min_trend_h=h,
-                        # indicators=[[1, TrendIndicator, h]],
+        bt1.plot_trades(crosshair=False, plot_trends=False,# min_trend_h=h,
+                        indicators=[[1, ATR, 30]],
                         bar_amount=100000)
         #bt1.profit_with_tax(2016, 2019, sl_for_risk=False)
 
@@ -316,11 +316,12 @@ def func():
     # test_trend_forecasting_model([2019], 35, model_years=[2016], strict_mode=True, mode="avg")
     # backtest_trend_pred(146)
 
-    def test_audio():
+    def miau():
         anal = Analyzer(dax_hist, 80, fast=True)
-        anal.find_trade_indicating_pattern(min_pattern_len=2, max_pattern_len=5, p=True)
+        anal.find_TIP(min_len=2, max_len=5, p=True)
+        interactive()
 
-    test_audio()
+    backtest_trend_follow()
 
 
 func()

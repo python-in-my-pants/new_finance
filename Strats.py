@@ -200,15 +200,16 @@ class MarketOpenSpike(Strategy):
 
 
 # done
-class TrendFollowStrat(Strategy):
+class TrendFollowStrat(Strategy):  # todo still not working
 
-    def __init__(self, threshold=80):
+    def __init__(self, threshold=80, threshold_func=None):
         super().__init__(lookback=1)
         self.uptrend = -1
         self.high = self.low = self.begin = 0
         self.high_index = self.low_index = self.break_index = 0
         self.hist = []
         self.threshold = threshold
+        self.threshold_func = threshold_func
         self.initializing = True
         self.name = "TrendFollowStrat"
         self.parameter_names = ["threshold"]  # everything that can be used to init the strat
@@ -227,12 +228,17 @@ class TrendFollowStrat(Strategy):
         self.hist = []
         self.initializing = True
         self.high = self.low = self.begin = data[0]["price"]
+        if self.threshold_func:
+            self.threshold_func.initialize(data[:self.threshold_func.lookback])
 
     def run(self, data):
 
         self.hist.append(data[0])
         i = len(self.hist) - 1
         last = data[0]["price"]
+
+        if self.threshold_func and len(self.hist) >= self.threshold_func.lookback:
+            self.threshold = 5 * self.threshold_func([q["price"] for q in self.hist])
 
         actions = []
 

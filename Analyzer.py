@@ -14,7 +14,7 @@ import os
 import pickle
 import pandas as pd
 from Utility import *
-import sounddevice as sd
+#import sounddevice as sd
 from PricePattern import *
 
 
@@ -470,6 +470,12 @@ class Analyzer:
 
     def build_trend_momentum_predictor(self, n, validation_data=None, substitute_training_data=None):
 
+        from sklearn.preprocessing import MinMaxScaler
+        from sklearn.metrics import mean_squared_error
+        from tensorflow.keras import Sequential
+        from keras.layers import Dense
+        from keras.layers import Dropout
+
         def make_trend_list(t, _n):
             _l = [t]
             for _ in range(_n-1):
@@ -656,7 +662,60 @@ class Analyzer:
 
         return model
 
-    # todo
+    def find_TIP(self, min_len=2, max_len=5, sig=0.7, min_occs=10, p=False):
+
+        dprices = self.derive_same_len(self.hist_obj.prices)[1:]
+        #dprices = self.derive_same_len([1, 10, 2, 8, 0, 0, 0, 0, 2, 11, 3, 9, 1])[1:]
+
+        pattern_lens = np.asarray([(i, j)
+                                   for i in range(min_len, max_len + 1)
+                                   for j in range(min_len, max_len + 1)])
+
+        significant_pattern = []
+        start_time = time.time()
+
+        for pattern_len_sum in range(2*min_len, 1+2*max_len):
+            relevant_pattern_lens_list = [obj for obj in pattern_lens if (obj[0]+obj[1] == pattern_len_sum)]
+
+            if p:
+                print(f"Checking pattern with length {pattern_len_sum}")
+
+            for relevant_pattern_len in relevant_pattern_lens_list:
+                cause_len, effect_len = relevant_pattern_len
+
+                if p:
+                    print(f'Checking cause length: {cause_len}, effect length: {effect_len}')
+
+                for gradient_index in range(len(dprices)-cause_len-effect_len):
+                    cause = dprices[gradient_index:gradient_index+cause_len]
+                    effect = dprices[gradient_index+cause_len:gradient_index+cause_len+effect_len]
+                    pattern = PricePattern(cause, effect)
+
+                    #print(f"    Checking pattern \n{pattern}\n") if p
+
+                    if p and gradient_index % 30 == 0:
+                        percent_done = 100 * gradient_index / (len(dprices) - cause_len - effect_len)
+                        seconds_passed = time.time() - start_time
+                        time_passed = seconds_to_timestamp(seconds_passed)
+                        time_left = seconds_to_timestamp(seconds_passed * 100 / (percent_done + 0.000003))
+                        print(f'\n{str(time_passed)} '
+                              f'Checking pattern {gradient_index + 1} out of {len(dprices) - cause_len - effect_len}'
+                              f'\t\t\t{str(percent_done)}% done\n'
+                              f'    ~{time_left} remaining, {len(significant_pattern)} pattern found so far\n')
+
+                    significant, percentage, occs = pattern.check_seq(dprices, significance=sig, min_occs=min_occs)
+
+                    if significant:
+                        significant_pattern.append((significant, percentage, occs))
+                        if p:
+                            print(f"Significant pattern found! Significance: {int(percentage * 100):2}%, "
+                                  f"Occurences: {occs:4}"
+                                  f"\n\tPattern:\n{pattern}\n")
+
+        if p:
+            print(significant_pattern)
+        return significant_pattern
+
     def find_trade_indicating_pattern(self,
                                       min_pattern_len=2,
                                       max_pattern_len=10,
@@ -734,7 +793,7 @@ class Analyzer:
             for pattern_selection_index in range(len(prices)-cause_len-eff_len):
 
                 cause = prices[pattern_selection_index:cause_len+pattern_selection_index]
-                effect = prices[pattern_selection_index+cause_len:pattern_selection_index+cause_len+eff_len]
+                effect = prices[pattern_selection_index+cause_len-1:pattern_selection_index+cause_len+eff_len-1]
                 pattern = PricePattern(cause, effect)
 
                 if p and pattern_selection_index % 30 == 0:

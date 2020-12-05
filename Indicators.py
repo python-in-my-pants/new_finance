@@ -45,6 +45,9 @@ def makeIndicator(indicator_name, *indicator_params):
     return indicator_name(*indicator_params)
 
 
+# todo make atr for dynamic threshold trend follow strat
+
+
 class TrendIndicator(Indicator):
 
     def __init__(self, threshold):
@@ -60,7 +63,7 @@ class TrendIndicator(Indicator):
 
         self.call_index = 0
 
-    def _call(self, price):
+    def _call(self, prices):
 
         uptrend = 1
         downtrend = -1
@@ -71,7 +74,7 @@ class TrendIndicator(Indicator):
         self.call_index += 1
 
         i = self.call_index
-        last = price
+        last = prices if type(prices) is not list else prices[-1]
 
         if self.initializing:
 
@@ -186,6 +189,35 @@ class SMA(Indicator):
         return np.concatenate(
             (np.asarray([prices[0] for _ in range(kwargs["period"]-1)]),
              np.convolve(prices, np.repeat(1.0, kwargs["period"]) / kwargs["period"], 'valid')))"""
+
+
+class ATR(Indicator):
+
+    def __init__(self, period):
+        Indicator.__init__(self)
+        self.lookback = period
+        self._period = period
+        self.name = "ATR {}".format(self._period)
+
+    def initialize(self, prices):
+        pass
+
+    def _call(self, prices):
+        der = Analyzer.derive_same_len(prices[-self.lookback:])[1:]
+        return sum([abs(x) for x in der])/(self.lookback-1)
+
+    @staticmethod
+    def get_full(prices, *args, **kwargs):
+        lookback = args[0]
+        values = []
+        for i in range(len(prices)):
+            if i >= lookback:
+                ps = prices[i-lookback:i]
+                der = Analyzer.derive_same_len(ps[-lookback:])[1:]
+                values.append(sum([abs(x) for x in der])/(lookback-1))
+            else:
+                values.append(0)
+        return values
 
 
 class Lowpass(Indicator):
