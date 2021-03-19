@@ -185,9 +185,20 @@ class Trend:
         return self.__repr__()
 
     def __repr__(self):
-        return "ID: {}\nStart: {}\n  End: {}\n\n  Len: {:5d}\t\tHeight: {:8.2f}\t\t Amp: {:8.2f}\n  Avg: {:8.2f}\t\t" \
-               "   Med: {:8.2f}\t   MaxDD: {:8.2f}\t\tFracDim: {:f}\n\n Type: {}\t\t True type: {}\t  " \
-               "Type coher:    {}\n\n  Mom: {:+8.2f}".\
+        return "Trend ID: {}\n-----------------------------------------------------------\n" \
+               "Start: {}\n  " \
+               "End: {}\n\n  " \
+               "Len: {:5d}\t\t" \
+               "Height: {:8.2f}\t\t " \
+               "Amp: {:8.2f}\n  " \
+               "Avg: {:8.2f}\t\t" \
+               "   Med: {:8.2f}\t   " \
+               "MaxDD: {:8.2f}\t\t" \
+               "FracDim: {:f}\n\n " \
+               "Type: {}\t\t " \
+               "True type: {}\t  " \
+               "Type coher:    {}\n\n  " \
+               "Mom: {:+8.2f}\n\n".\
             format(self.trend_id, self.start_time, self.end_time, self.len, self.height, self.amplitude, self.avg,
                    self.med, self.max_dd, self.frac_dim, self.type, self.true_type, self.type_coherence, self.momentum)
 
@@ -219,14 +230,14 @@ class Analyzer:
             prices = self.derive_same_len(prices, gradient)
         data = prices / np.max(np.abs(prices), axis=0)
         print("Done normalizing price data ...")
-        sd.play(data, 44100, blocking=True)
+        #sd.play(data, 44100, blocking=True)
         print("Playback done")
 
     def make_sim_table(self, pr=False):
 
         sim_table = {}
         i = 1
-        p =0
+        p = 0
         for t1 in self.trend_list:
 
             if pr:
@@ -254,7 +265,7 @@ class Analyzer:
         sim_table_path = sim_table_path.replace(" ", "_").replace(".", "-").replace(":", "")
         try:
             with open(sim_table_path + ".pickle", "rb") as file:
-                print("Unpacking similarity table at", sim_table_path, "...")
+                print("Unpacking similarity table at", sim_table_path, "...\n")
                 sim_table = pickle.load(file)
                 if sim_table is None:
                     raise TypeError("sim table is none after reading from file")
@@ -279,6 +290,55 @@ class Analyzer:
 
     def get_avg_trend_len(self):
         return avg([t.len for t in self.trend_list])
+
+    def get_max_profit(self, spread, test_data=None, p=True):
+
+        d = self.derive_same_len(self.hist_obj.prices)[1:] if not test_data else self.derive_same_len(test_data)[1:]
+
+        def next_significant_portion_end(price_list):
+            s = 0
+            index = 0
+            while index < len(price_list) and -spread <= s <= spread:
+                s += price_list[index]
+                index += 1
+            return index, 1 if s > spread else 0
+
+        i = 0
+        portions = [[]]
+        end_index = True
+        _, last_kind = next_significant_portion_end(d[i:])
+
+        while end_index:
+            end_index, kind = next_significant_portion_end(d[i:])
+            if kind == last_kind:
+                portions[-1] += d[i:i+end_index]
+            else:
+                last_kind = kind
+                portions.append(d[i:i+end_index])
+            i += end_index
+
+        portions = portions[:-1]
+
+        if p:
+            long_wins = [p for p in portions if sum(p) > spread]
+            number_long_wins = len(long_wins)
+            summed_long_wins = sum([sum(w) for w in long_wins])
+
+            short_wins = [p for p in portions if sum(p) < -spread]
+            number_short_wins = len(short_wins)
+            summed_short_wins = -sum([sum(w) for w in short_wins])
+
+            print(f"Long wins:\t  {summed_long_wins:12.2f}\t\t"
+                  f"Long win trades:   {number_long_wins:4d}\t\t"
+                  f"Trade costs: {number_long_wins*spread:12.2f}\n"
+                  
+                  f"Short wins:   {summed_short_wins:12.2f}\t\t"
+                  f"Short win trades:  {number_short_wins:4d}\t\t"
+                  f"Trade costs: {number_short_wins*spread:12.2f}\n\n"
+                  
+                  f"\t   Sum: {summed_long_wins+summed_short_wins:12.2f}")
+
+        return sum([abs(sum(t)) for t in portions]) - spread*len(portions), portions
 
     def get_volatility(self, data):
         return self.get_std_dev(data)**0.5
@@ -885,25 +945,35 @@ class Analyzer:
                             print("{:+8.2f} {:+8.2f} {:+8.2f}".format(t.prices[i], t.derivate1[i], t.derivate2[i]))
             print("---------------------")
 
-    def simulate_trend_follow(self, p=False):
+    def simulate_trend_follow(self, trade_cost=0, p=False):
         longs = list(filter(lambda y: y.type == "Up  ", self.trend_list))
         shorts = list(filter(lambda y: y.type == "Down", self.trend_list))
 
-        long_wins = sum([(x.height if x.height > 0 else 0) for x in longs])
-        long_losses = sum([(x.height if x.height <= 0 else 0) for x in longs])
+        number_long_wins = len([1 for x in longs if x.height > 0])
+        long_wins = sum([(x.height if x.height > 0 else 0) for x in longs]) - number_long_wins*trade_cost
+        number_long_losses = len([1 for x in longs if x.height < 0])
+        long_losses = sum([(x.height if x.height < 0 else 0) for x in longs]) - number_long_losses*trade_cost
 
-        short_losses = -sum([(x.height if x.height > 0 else 0) for x in shorts])
-        short_wins = -sum([(x.height if x.height <= 0 else 0) for x in shorts])
+        number_short_losses = len([1 for x in shorts if x.height > 0])
+        short_losses = -sum([(x.height if x.height > 0 else 0) for x in shorts]) - number_short_losses*trade_cost
+        number_short_wins = len([1 for x in shorts if x.height < 0])
+        short_wins = -sum([(x.height if x.height < 0 else 0) for x in shorts]) - number_short_wins*trade_cost
 
         if p:
-            print("Long wins:  {:12.2f}\t\tLong losses:  {:12.2f}\n"
-                  "Short wins: {:12.2f}\t\tShort losses: {:12.2f}\n\n"
+            print("Long wins:\t  {:12.2f}\t\tLong win trades:   {:4d}\t\tTrade costs: {:12.2f}\n"
+                  "Long losses:  {:12.2f}\t\tLong loss trades:  {:4d}\t\tTrade costs: {:12.2f}\n"
+                  "Short wins:   {:12.2f}\t\tShort win trades:  {:4d}\t\tTrade costs: {:12.2f}\n"
+                  "Short losses: {:12.2f}\t\tShort loss trades: {:4d}\t\tTrade costs: {:12.2f}\n\n"
                   "\t   Sum: {:12.2f}\n  Buy&Hold: {:12.2f}".
-                  format(long_wins, long_losses, short_wins, short_losses,
+                  format(long_wins, number_long_wins, number_long_wins*trade_cost,
+                         long_losses, number_long_losses, number_long_losses*trade_cost,
+                         short_wins, number_short_wins, number_short_wins*trade_cost,
+                         short_losses, number_short_losses, number_short_losses*trade_cost,
                          long_wins + long_losses + short_wins + short_losses,
                          self.hist[-1]["price"] - self.hist[0]["price"]))
 
-        return long_wins, long_losses, short_wins, short_losses, long_wins + long_losses + short_wins + short_losses
+        return long_wins, long_losses, short_wins, short_losses, \
+               long_wins + long_losses + short_wins + short_losses
 
     @staticmethod
     def derive_same_len(seq, times=1):
@@ -1242,13 +1312,14 @@ class Analyzer:
             return 0, None, None
 
         try:
-            max_h = max(longer_higher, key=lambda x: x.height).height // 1
+            print(longer_higher)
+            max_h = max(longer_higher, key=lambda t: t.height) // 1
         except Exception:
             max_h = curr_h
         max_h = min(max_h, curr_h*5)
 
         try:
-            max_l = max(longer_higher, key=lambda x: x.len).len // 1
+            max_l = max(longer_higher, key=lambda t: t.len) // 1
         except Exception:
             max_l = curr_len
         column_h = int((max_h - curr_h) / bin_size) + 1
@@ -1257,7 +1328,7 @@ class Analyzer:
 
         for column_index, certain_len_column in enumerate(occurence_matrix):
             for i in range(len(certain_len_column)):
-                # count number of trends with that len and height in that range
+                # count number of trends with certain length and height in that range
                 occurence_matrix[column_index][i] += \
                     len(list(filter(lambda x: curr_h + (i * bin_size) <= x.height < curr_h + ((i + 1) * bin_size),
                                     list(filter(lambda x: x.len == curr_len + column_index, longer_higher)))))
@@ -1273,10 +1344,15 @@ class Analyzer:
                     occurence_matrix[column_index][i] *= 100
 
         else:
+            s = np.asmatrix(occurence_matrix).sum()
             for lis in occurence_matrix:
                 for elem in lis:
-                    elem /= len(longer_higher)
+                    elem /= s
                     elem *= 100
+            """for lis in occurence_matrix:
+                for elem in lis:
+                    elem /= len(longer_higher)
+                    elem *= 100"""
 
         return occurence_matrix, max_h, max_l
 
@@ -1985,13 +2061,17 @@ class Plotter:
         y, x = np.meshgrid(np.array([curr_h + x*bin_size for x in list(range(column_h))]),
                            np.array(list(range(curr_len, max_l+1))))"""
 
-        fig, ax = plt.subplots(figsize=(8, 8))
+        fig, ax = plt.subplots()#figsize=(8, 8))
         asp = min(max_l-curr_len, max_h-curr_h)/max(max_h-curr_h, max_l-curr_len)
-        ax.imshow(np.transpose(np.array(occurence_matrix)), origin='lower', interpolation=interpol, aspect=asp,
-                  extent=[curr_len, max_l, curr_h, max_h])
-        plt.subplots_adjust(0.17, 0.10, 0.99, 0.99)
+        bar = ax.imshow(np.transpose(np.array(occurence_matrix)), origin='lower', interpolation=interpol, aspect=asp,
+                        extent=[curr_len, max_l, curr_h, max_h])
+        fig.colorbar(bar, ax=ax)
+        # plt.subplots_adjust(0.17, 0.10, 0.99, 0.99)
 
-        #plt.pcolor(x, y, np.array(occurence_matrix))
+        # plt.pcolor(x, y, np.array(occurence_matrix))
+        ax.set_title("Trend end probability considering height and duration", color="white")
+        ax.set_xlabel("Full duration", color="white")
+        ax.set_ylabel("Height range from current", color="white")
         plt.show()
 
         """fig = plt.figure()
@@ -1999,7 +2079,6 @@ class Plotter:
         surf = ax.plot_surface(x, y, np.array(occurence_matrix), cmap=cm.coolwarm)
         ax.set_zlim(0, 1)
         fig.colorbar(surf, aspect=5)"""
-
 
         """
         # <editor-fold desc="old">
@@ -2056,6 +2135,7 @@ class Plotter:
             bin_list[l] = height_column
 
             print("interpolated for len", l, ":", height_column)"""
+
         # </editor-fold>
     # </editor-fold>
 

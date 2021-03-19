@@ -33,6 +33,12 @@ def func():
 
         Plotter.sm_autocor(moms)
 
+    def anal2_trends():
+        anal16 = Analyzer(dax_hist, min_trend_h=30)
+        plotter = Plotter(anal16)
+
+        plotter.PTEP_len_h(20, 50, max_dur=150)
+
     def anal_trends():
         anal16 = Analyzer(dax_hist)
         plotter = Plotter(anal16)
@@ -49,9 +55,9 @@ def func():
 
     def backtest_trend_follow():
         t = Trader.HALF_RISK
-        h = makeIndicator(ATR, 30)
+        #h = makeIndicator(ATR, 30)
 
-        trend_follow = strat_dict["trend follow"](threshold_func=h)
+        trend_follow = strat_dict["trend follow"](threshold=80)
 
         bt1 = Backtester(trend_follow, dax_hist,
                          use_balance=True, asset_data=AssetData.GER30,
@@ -61,9 +67,9 @@ def func():
         #bt1.sl_in_pips = bt1.optimize_sl(p=True)
         #bt1.ts_in_pips = bt1.optimize_ts(p=True)
 
-        bt1.test()
+        bt1.test(p=True, min_trend_h=80, fast=False)
         bt1.plot_trades(crosshair=False, plot_trends=False,# min_trend_h=h,
-                        indicators=[[1, ATR, 30]],
+                        #indicators=[[1, ATR, 30]],
                         bar_amount=100000)
         #bt1.profit_with_tax(2016, 2019, sl_for_risk=False)
 
@@ -313,15 +319,25 @@ def func():
 
         anal.get_extern_trend_prediction_error(test_anal.trend_list, p=True, use_strict_mode=strict_mode, mode=mode)
 
+    def test_max_profit():
+        anal = Analyzer(dax_hist, min_trend_h=80, fast=True)
+        prof, trades = anal.get_max_profit(5)
+
+        print(prof)
+        print(len(trades))
+        print(prof/len(trades))
+
     # test_trend_forecasting_model([2019], 35, model_years=[2016], strict_mode=True, mode="avg")
     # backtest_trend_pred(146)
 
-    def miau():
+    def find_TIP():
         anal = Analyzer(dax_hist, 80, fast=True)
         anal.find_TIP(min_len=2, max_len=5, p=True)
         interactive()
 
-    backtest_trend_follow()
+    #backtest_trend_follow()
+    #plot_trend_forecasting_ability(steps=10)
+    anal2_trends()
 
 
 func()

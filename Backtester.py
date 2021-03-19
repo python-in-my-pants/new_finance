@@ -48,7 +48,7 @@ class Backtester:
                         "exitShort": self.exitShort}
 
     def test(self, p=True, full_print=False, single_step=False, use_sl_for_risk=False,
-             only_long=False, only_short=False, fast=True):
+             only_long=False, only_short=False, fast=True, min_trend_h=0):
 
         """
         :param only_long:
@@ -97,7 +97,6 @@ class Backtester:
                 # an event happened, because we need to check for it first
                 price = prices[index+1]
                 time = times[index+1]
-                print(index) if index % 10000 == 0 else None
 
                 # test SL and TP and TS for all open trades
                 for trade in self.open_long_trades + self.open_short_trades:
@@ -238,7 +237,7 @@ class Backtester:
         results = self.get_results(p=p)
         if p and not fast:
             print("Best possible results:\n")
-            Analyzer(hist_obj=self.hist_obj, min_trend_h=0, realistic=False).simulate_trend_follow(True)
+            Analyzer(hist_obj=self.hist_obj, min_trend_h=min_trend_h, realistic=False, fast=True).get_max_profit(self.trade_cost)
 
         return results
 
@@ -499,19 +498,27 @@ class Backtester:
 
             # TODO sharpe & ulcer ratio ... maybe alpha if it is what I think?
             if p:
-                print(" Long wins: {:12.2f} ({:5.2f} %)\t\t"
-                      "Long losses:  {:12.2f} ({:5.2f} %)\n"
-                      "Short wins: {:12.2f} ({:5.2f} %)\t\t"
-                      "Short losses: {:12.2f} ({:5.2f} %)\n\n\t   "
-                      "Sum: {:12.2f}\t\t"
-                      "MaxDD:\t\t{:12.2f}\n"
-                      "  # trades: {:9d}\t\t\t"
-                      "MaxDD in %: {:12.2f}\n"
-                      "  Buy&Hold: {:12.2f}\n".
-                      format(long_wins, 100 * long_wins_num / trades, long_losses, 100 * long_losses_num / trades,
-                             short_wins, 100 * short_wins_num / trades, short_losses, 100 * short_losses_num / trades,
-                             long_wins + long_losses + short_wins + short_losses, self.max_dd, trades, self.max_dd_perc,
-                             self.hist_obj.hist[-1]["price"] - self.hist_obj.hist[0]["price"]))
+                print(f" Long wins:   {long_wins:12.2f} ({100 * long_wins_num / trades:5.2f} %)\t\t"
+                      f"Long win trades:   {long_wins_num:4d}\t\t"
+                      f"Trade costs: {long_wins_num*self.trade_cost:12.2f}\n"
+                      
+                      f"Long losses:  {long_losses:12.2f} ({100 * long_losses_num / trades:5.2f} %)\t\t"
+                      f"Long loss trades:  {long_losses_num:4d}\t\t"
+                      f"Trade costs: {long_losses_num*self.trade_cost:12.2f}\n\n"
+                      
+                      f"Short wins:   {short_wins:12.2f} ({100 * short_wins_num / trades:5.2f} %)\t\t"
+                      f"Short win trades:  {short_wins_num:4d}\t\t"
+                      f"Trade costs: {short_wins_num*self.trade_cost:12.2f}\n"
+                      
+                      f"Short losses: {short_losses:12.2f} ({100 * short_losses_num / trades:5.2f} %)\t\t"
+                      f"Short loss trades: {short_losses_num:4d}\t\t"
+                      f"Trade costs: {short_losses_num*self.trade_cost:12.2f}\n\n"
+                      
+                      f"\t   Sum: {long_wins + long_losses + short_wins + short_losses:12.2f}\t\t"
+                      f"MaxDD:\t\t{self.max_dd:12.2f}\n"
+                      f"  # trades: {trades:9d}\t\t\t"
+                      f"MaxDD in %: {self.max_dd_perc:12.2f}\n"
+                      f"  Buy&Hold: {(self.hist_obj.hist[-1]['price']-self.hist_obj.hist[0]['price']):12.2f}\n")
             return long_wins + long_losses + short_wins + short_losses
         else:
             return 0
