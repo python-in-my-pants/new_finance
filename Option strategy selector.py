@@ -10,15 +10,16 @@ from scipy.stats import norm
 from option_greeks import get_greeks
 import warnings
 import copy
+import pickle
 
-# np.seterr('raise')
 pritn = print
-#pd.set_option("display.precision", 5)
+online = False
 
 pd.set_option("display.max_rows", None, "display.max_columns", None)
 pd.set_option('display.width', 1000)
 pd.set_option('display.max_colwidth', 500)
 pd.set_option('display.float_format', lambda x: '%.5f' % x)
+pd.options.mode.chained_assignment = None  # default='warn'
 
 ACCOUNT_BALANCE = 2000
 
@@ -49,7 +50,7 @@ def dte_to_date(dte):
     return datetime.now() + timedelta(days=dte)
 
 
-libor_rates = get_libor_rates()
+libor_rates = get_libor_rates() if online else [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
 libor_expiries = (1, 7, 30, 61, 92, 182, 365)
 
 
@@ -114,31 +115,44 @@ def propose_strategies(ticker, defined_risk_only=True, avoid_events=True,
     print(f'Settings:\n\n'
           f'          Defined risk only: {defined_risk_only}\n'
           f'               Avoid events: {avoid_events}\n'
-          f'                 Min vol 30: {defined_risk_only}\n'
-          f'       Min open interest 30: {defined_risk_only}\n'
+          f'                 Min vol 30: {min_vol30}\n'
+          f'       Min open interest 30: {min_oi30}\n'
           f'                Strict mode: {strict_mode}\n'
           f'Assignment must be possible: {assignment_must_be_possible}\n')
 
     # <editor-fold desc="Get info">
-    yf_obj = yf.Ticker(ticker)
-    u_price = yf_obj.info["ask"]
-    sector = yf_obj.info["sector"]
+    if online:
+        yf_obj = yf.Ticker(ticker)
+        u_price = yf_obj.info["ask"]
+        sector = yf_obj.info["sector"]
+    else:
+        class Dummy:
+            def __init__(self):
+                self.ticker = ticker
 
-    option_chain_dict = get_option_chain(yf_obj)
-    option_chain = OptionChain(option_chain_dict)
+        yf_obj = Dummy()
+        u_price = 10
+        sector = "ABC"
 
-    expirations = list(option_chain_dict.keys())
+    option_chain = get_option_chain(yf_obj)
 
-    next_puts = option_chain_dict[expirations[0]].puts
-    next_calls = option_chain_dict[expirations[0]].calls
+    expirations = option_chain.expirations
+
+    print(option_chain.options.head(5))
+
+    #next_puts = option_chain.expiry_next().puts()
+    next_calls = option_chain.expiry_next().calls()
+
+    pritn(next_calls)
 
     """print(next_calls.head(300))
     pritn()
     print(next_puts.head(300))"""
 
-    print(option_chain)
-
-    ivr, vol30, oi30, next_earnings = get_options_meta_data(ticker)
+    if online:
+        ivr, vol30, oi30, next_earnings = get_options_meta_data(ticker)
+    else:
+        ivr, vol30, oi30, next_earnings = 0.5, 26000, 7000, "01/01/30"
     short, mid, long = get_underlying_outlook(ticker)
 
     # </editor-fold>
@@ -212,7 +226,7 @@ def propose_strategies(ticker, defined_risk_only=True, avoid_events=True,
     only rough check, options to trade must be checked seperately when chosen
     """
 
-    if not is_liquid():
+    if not True and is_liquid():  # todo
         warnings.warn(f'Warning! Underlying seems illiquid!')
         if strict_mode:
             return
@@ -222,9 +236,7 @@ def propose_strategies(ticker, defined_risk_only=True, avoid_events=True,
     assingment_risk_tolerance_exceeded()
     # </editor-fold>
 
-    print("\nAll mandadory checks done! Starting strategy selection ...")
-
-    #print(f'Covered call (tasty): {CoveredCall.get_tasty_variation(option_chain)}')
+    print("\nAll mandatory checks done! Starting strategy selection ...")
 
     # -----------------------------------------------------------------------------------------------------------------
 
@@ -235,7 +247,7 @@ def propose_strategies(ticker, defined_risk_only=True, avoid_events=True,
         # <editor-fold desc="defined risk">
 
         # covered call
-        print(f'Covered call (tasty): {CoveredCall.get_tasty_variation(option_chain_dict)}')
+        #print(f'Covered call (tasty): {CoveredCall.get_tasty_variation(option_chain)}')
 
         # Credit spreads (Bear/Bull)
 
@@ -455,6 +467,9 @@ def get_option_chain(yf_obj):
 
     start = datetime.now()
 
+    if not online:
+        return OptionChain.from_file(filename=yf_obj.ticker + "_chain")
+
     option_chain = DDict()
     ticker_data = yf_obj
     underlying_ask = float(yf_obj.info["ask"])
@@ -473,7 +488,7 @@ def get_option_chain(yf_obj):
         risk_free_interest = get_risk_free_rate(_dte)
 
         for index, contract in contracts.iterrows():
-            contracts.at[index, "mid"] = (contract["bid"] + contract["ask"]) / 2
+            contracts.loc[index, "mid"] = (contract["bid"] + contract["ask"]) / 2
             contract_price = contract["mid"]
             iv = max(min(float(contract["IV"]), 100), 0.005)
 
@@ -485,12 +500,12 @@ def get_option_chain(yf_obj):
                                                                        contract_price,
                                                                        iv=iv)
 
-            contracts.at[index, "delta"] = -delta if contract_type == "p" else delta
-            contracts.at[index, "gamma"] = gamma
-            contracts.at[index, "vega"] = vega
-            contracts.at[index, "theta"] = theta / 100
-            contracts.at[index, "rho"] = rho
-            contracts.at[index, "IV"] = iv
+            contracts.loc[index, "delta"] = -delta if contract_type == "p" else delta
+            contracts.loc[index, "gamma"] = gamma
+            contracts.loc[index, "vega"] = vega
+            contracts.loc[index, "theta"] = theta / 100
+            contracts.loc[index, "rho"] = rho
+            contracts.loc[index, "IV"] = iv
 
             """
             opt_price, iv, delta, gamma, theta, vega, rho = get_greeks(contract_type,
@@ -530,7 +545,7 @@ def get_option_chain(yf_obj):
 
     print("Gathering options data took", (datetime.now() - start).total_seconds(), "seconds")
 
-    return option_chain
+    return OptionChain(chain_dict=option_chain)
 
 
 class DDict(dict):
@@ -538,6 +553,10 @@ class DDict(dict):
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
     __hash__ = dict.__hash__
+
+
+def get_timestamp():
+    return datetime.now().strftime("%H:%M:%S.%f")
 
 
 # <editor-fold desc="Requirements">
@@ -604,6 +623,8 @@ def get_atm_bid_ask(chain, _ask):
     returns relative and absolute spread
     """
 
+    return 0,0  # todo
+
     b = float(chain.loc[chain["strike"] == get_atm_strike(chain, _ask)]["bid"])
     a = float(chain.loc[chain["strike"] == get_atm_strike(chain, _ask)]["ask"])
 
@@ -637,6 +658,8 @@ class Option:
         :param rho:
         :param iv:
         """
+
+        # TODO take single DF line to extract data
 
         self.opt_type, self.expiration, self.strike = opt_type, expiration, strike
         self.bid = bid
@@ -1015,58 +1038,99 @@ class OptionChain:
     methods return list of options that adhere to the given filter arguments
     """
 
-    def __init__(self, chain_dict):
-        self.expirations = list(chain_dict.keys())
+    def __init__(self, chain=None, chain_dict=None, ):
 
-        contract_list = list()
+        if chain is not None:
+            self.options = chain
+            if not chain.empty:
+                self.expirations = sorted(chain.expiration.unique().tolist())
+                self.ticker = chain.at[0, "name"][:6]
+                self.ticker = ''.join([i for i in self.ticker if not i.isdigit()])
+            else:
+                self.expirations = []
+                self.ticker = None
 
-        for expiry in self.expirations:
-            chain_dict[expiry].puts["contract"] = "p"
-            chain_dict[expiry].puts["expiration"] = expiry
-            chain_dict[expiry].puts["direction"] = "long"
+            print("After filtering:", self.expirations, "\n", self.options)
+        else:
+            self.expirations = list(chain_dict.keys())
 
-            chain_dict[expiry].calls["contract"] = "c"
-            chain_dict[expiry].calls["expiration"] = expiry
-            chain_dict[expiry].calls["direction"] = "long"
+            self.ticker = chain_dict[self.expirations[0]].puts.loc[0, "name"][:6]
+            self.ticker = ''.join([i for i in self.ticker if not i.isdigit()])
 
-            contract_list.extend((chain_dict[expiry].puts, chain_dict[expiry].calls))
+            contract_list = list()
 
-        long_chain = pd.concat(contract_list, ignore_index=True)
-        short_chain = long_chain.copy()
+            for expiry in self.expirations:
+                chain_dict[expiry].puts.loc[:, "contract"] = "p"
+                chain_dict[expiry].puts.loc[:, "expiration"] = expiry
+                chain_dict[expiry].puts.loc[:, "direction"] = "long"
 
-        for index, row in short_chain.iterrows():
-            short_chain.at[index, "direction"] = "short"
-            short_chain.at[index, "delta"] *= -1
-            short_chain.at[index, "gamma"] *= -1
-            short_chain.at[index, "vega"] *= -1
-            short_chain.at[index, "theta"] *= -1
-            short_chain.at[index, "rho"] *= -1
+                chain_dict[expiry].calls.loc[:, "contract"] = "c"
+                chain_dict[expiry].calls.loc[:, "expiration"] = expiry
+                chain_dict[expiry].calls.loc[:, "direction"] = "long"
 
-        self.options = pd.concat((long_chain, short_chain), ignore_index=True)
+                contract_list.extend((chain_dict[expiry].puts, chain_dict[expiry].calls))
+
+            long_chain = pd.concat(contract_list, ignore_index=True)
+            short_chain = long_chain.copy()
+
+            for index, row in short_chain.iterrows():
+                short_chain.loc[index, "direction"] = "short"
+                short_chain.loc[index, "delta"] *= -1
+                short_chain.loc[index, "gamma"] *= -1
+                short_chain.loc[index, "vega"] *= -1
+                short_chain.loc[index, "theta"] *= -1
+                short_chain.loc[index, "rho"] *= -1
+
+            self.options = pd.concat((long_chain, short_chain), ignore_index=True)
+
+            self.save_as_file()
 
     def __repr__(self):
         return self.options.to_string()
 
+    # <editor-fold desc="Type">
+
     def puts(self):
-        ...
+        return OptionChain(self.options.loc[self.options['contract'] == "P"])
 
     def calls(self):
-        ...
+        return OptionChain(self.options.loc[self.options['contract'] == "C"])
 
     def long(self):
-        ...
+        return OptionChain(self.options.loc[self.options['direction'] == "long"])
 
     def short(self):
-        ...
+        return OptionChain(self.options.loc[self.options['direction'] == "short"])
 
+    # </editor-fold>
+
+    # <editor-fold desc="Expiry">
     def expiry_range(self, lower_dte, upper_dte):
-        ...
+        dates = pd.date_range(start=datetime.now() + timedelta(days=lower_dte),
+                              end=datetime.now() + timedelta(days=upper_dte),
+                              normalize=True)
+        # todo works?
+        return OptionChain(self.options.loc[self.options['expiration'] in dates])
 
     def expiry_date(self, exp_date):
-        ...
+        print("Exp date:", exp_date)
+        return OptionChain(self.options.loc[self.options['expiration'] == exp_date])
 
     def expiry_dte(self, dte):
         ...
+
+    def expiry_next(self, i=0):
+        """
+        get i-th expiry's puts & calls
+        :param i:
+        :return:
+        """
+        print(self.expirations[i])
+        return OptionChain(self.options.loc[self.options['expiration'] == self.expirations[i]])
+
+    # </editor-fold>
+
+    # <editor-fold desc="Greeks">
 
     def greek(self, g, lower=0, upper=1):
         """
@@ -1078,8 +1142,8 @@ class OptionChain:
         """
         ...
 
-    def greek_close(self, d):
-        return min_closest_index()
+    def greek_close_to(self, d):
+        return min_closest_index(...)
 
     def delta(self, lower=-1, upper=1):
         return self.greek("delta", lower, upper)
@@ -1107,9 +1171,36 @@ class OptionChain:
 
     def rho(self, lower=-1, upper=1):
         return self.greek("rho", lower, upper)
+    # </editor-fold>
 
     def iv(self, lower=0, upper=10000):
         ...
+
+    # <editor-fold desc="File">
+    def save_as_file(self):
+
+        filename = self.ticker + "_chain"  # + get_timestamp().replace(".", "-").replace(":", "-")
+
+        try:
+            print(f'Creating file:\n'
+                  f'\t{filename}.pickle ...')
+
+            with open(filename + ".pickle", "wb") as file:
+                pickle.dump(self, file)
+
+            print("File created successfully!")
+
+        except Exception as e:
+            print("While creating the file", filename, "an exception occurred:", e)
+
+    @staticmethod
+    def from_file(filename):
+        try:
+            f = pickle.load(open(filename + ".pickle", "rb"))
+            return f
+        except Exception as e:
+            print("While reading the file", filename, "an exception occurred:", e)
+    # </editor-fold>
 
 
 class LongCall(OptionStrategy):
@@ -1135,9 +1226,12 @@ class CoveredCall(OptionStrategy):
 
     @staticmethod
     def get_tasty_variation(chain):
-        expiration = get_closest_date(list(chain.keys()), 45)
-        strike = get_delta_option_strike(chain[expiration].calls, 0.325)
-        premium = float(chain[expiration].calls.loc[chain[expiration].calls["strike"] == strike]["ask"])
+        expiration = get_closest_date(chain.expirations, 45)
+        strike = get_delta_option_strike(chain.expiry_date(expiration).calls(), 0.325)
+        premium = float(chain
+                        .expiry_date(expiration)
+                        .calls()
+                        .strike(strike)["ask"])
 
         return Option('c', expiration, strike, premium)
 
