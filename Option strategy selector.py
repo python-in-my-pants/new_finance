@@ -14,6 +14,14 @@ import pickle
 
 pritn = print
 online = False
+debug = False
+
+
+def _debug(*args):
+    if debug:
+        print()
+        print(*args)
+
 
 pd.set_option("display.max_rows", None, "display.max_columns", None)
 pd.set_option('display.width', 1000)
@@ -138,21 +146,21 @@ def propose_strategies(ticker, defined_risk_only=True, avoid_events=True,
 
     expirations = option_chain.expirations
 
-    print(option_chain.options.head(5))
-
     #next_puts = option_chain.expiry_next().puts()
-    next_calls = option_chain.expiry_next().calls()
+    #next_calls = option_chain.expiry_next().calls()
 
-    pritn(next_calls)
+    print(option_chain.delta_close_to(0.35))
 
-    """print(next_calls.head(300))
-    pritn()
-    print(next_puts.head(300))"""
+    """
+    import ipdb
+    ipdb.set_trace()
+    """
 
     if online:
         ivr, vol30, oi30, next_earnings = get_options_meta_data(ticker)
     else:
         ivr, vol30, oi30, next_earnings = 0.5, 26000, 7000, "01/01/30"
+
     short, mid, long = get_underlying_outlook(ticker)
 
     # </editor-fold>
@@ -226,7 +234,7 @@ def propose_strategies(ticker, defined_risk_only=True, avoid_events=True,
     only rough check, options to trade must be checked seperately when chosen
     """
 
-    if not True and is_liquid():  # todo
+    if not is_liquid():
         warnings.warn(f'Warning! Underlying seems illiquid!')
         if strict_mode:
             return
@@ -569,6 +577,16 @@ def low(x):  # x 0 to 100
     return 0 if x >= 50 else 1 - (x / 50 if x > 0 else 0)
 
 
+def high_ivr(ivr):
+    # todo adjust to overall market situation (give result in relation to VIX IV)
+    return 0 if ivr <= 50 else (ivr / 50 if ivr > 0 else 0) - 1
+
+
+def low_ivr(x):  # x 0 to 100
+    # todo adjust to overall market situation (give result in relation to VIX IV)
+    return 0 if x >= 50 else 1 - (x / 50 if x > 0 else 0)
+
+
 def calendar_spread_check(front_m_vol, back_m_vol):
     return front_m_vol >= back_m_vol * 1.2
 
@@ -602,7 +620,7 @@ def date_to_opt_format(d):
 
 
 def get_delta_option_strike(chain, delta):  # chain must contain deltas (obviously onii-chan <3)
-    return chain["strike"][min_closest_index(list(chain["delta"]), delta)]
+    return chain.at["strike", min_closest_index(list(chain["delta"]), delta)]
 
 
 def min_closest_index(a, v):
@@ -1037,20 +1055,34 @@ class OptionChain:
     """
     methods return list of options that adhere to the given filter arguments
     """
+    """
+    cols = ["name", "strike", "bid", "ask", "mid", "volume", "OI", "IV",
+            "delta", "gamma", "vega", "theta", "rho", "contract", "expiration direction"]
+    """
+    cols = None
 
     def __init__(self, chain=None, chain_dict=None, ):
 
         if chain is not None:
-            self.options = chain
+            chain.reset_index(inplace=True, drop=True)
+
+            if type(chain) is pd.Series:
+                self.options = chain.to_frame()
+                self.options.columns = OptionChain.cols
+                print(OptionChain.cols)
+            if type(chain) is pd.DataFrame:
+                self.options = chain
+
             if not chain.empty:
-                self.expirations = sorted(chain.expiration.unique().tolist())
-                self.ticker = chain.at[0, "name"][:6]
+                self.expirations = sorted(self.options["expiration"].unique().tolist())
+                self.ticker = self.options.at[0, "name"][:6]
                 self.ticker = ''.join([i for i in self.ticker if not i.isdigit()])
             else:
                 self.expirations = []
                 self.ticker = None
 
-            print("After filtering:", self.expirations, "\n", self.options)
+            _debug("After filtering:", self.expirations, "\nLength:", len(self.options), "\n", self.options.head(5))
+
         else:
             self.expirations = list(chain_dict.keys())
 
@@ -1083,24 +1115,46 @@ class OptionChain:
 
             self.options = pd.concat((long_chain, short_chain), ignore_index=True)
 
+            OptionChain.cols = list(self.options.columns.values)
+
             self.save_as_file()
 
     def __repr__(self):
         return self.options.to_string()
+        # df.style.background_gradient(cmap='coolwarm')
+
+    def head(self, n=5):
+        return self.options.head(n)
 
     # <editor-fold desc="Type">
 
     def puts(self):
-        return OptionChain(self.options.loc[self.options['contract'] == "P"])
+        _debug("Filter for puts")
+        f = self.options.loc[self.options['contract'] == "p"]
+        if type(f) is pd.Series:
+            f = f.to_frame()
+        return OptionChain(f)
 
     def calls(self):
-        return OptionChain(self.options.loc[self.options['contract'] == "C"])
+        _debug("Filter for calls")
+        f = self.options.loc[self.options['contract'] == "c"]
+        if type(f) is pd.Series:
+            f = f.to_frame()
+        return OptionChain(f)
 
     def long(self):
-        return OptionChain(self.options.loc[self.options['direction'] == "long"])
+        _debug("Filter for longs")
+        f = self.options.loc[self.options['direction'] == "long"]
+        if type(f) is pd.Series:
+            f = f.to_frame()
+        return OptionChain(f)
 
     def short(self):
-        return OptionChain(self.options.loc[self.options['direction'] == "short"])
+        _debug("Filter for shorts")
+        f = self.options.loc[self.options['direction'] == "short"]
+        if type(f) is pd.Series:
+            f = f.to_frame()
+        return OptionChain(f)
 
     # </editor-fold>
 
@@ -1110,14 +1164,24 @@ class OptionChain:
                               end=datetime.now() + timedelta(days=upper_dte),
                               normalize=True)
         # todo works?
-        return OptionChain(self.options.loc[self.options['expiration'] in dates])
+        f = self.options.loc[self.options['expiration'] in dates]
+        if type(f) is pd.Series:
+            f = f.to_frame()
+        return OptionChain(f)
 
     def expiry_date(self, exp_date):
-        print("Exp date:", exp_date)
-        return OptionChain(self.options.loc[self.options['expiration'] == exp_date])
+        _debug("Exp date:", exp_date)
+        f = self.options.loc[[self.options['expiration'] == exp_date]]
+        if type(f) is pd.Series:
+            f = f.to_frame()
+        return OptionChain(f)
 
-    def expiry_dte(self, dte):
-        ...
+    def expiry_close_to_dte(self, dte):
+        _debug("Filter for expiry close to", dte, "dte")
+        f = self.options.loc[self.options['expiration'] == get_closest_date(self.expirations, dte)]
+        if type(f) is pd.Series:
+            f = f.to_frame()
+        return OptionChain(f)
 
     def expiry_next(self, i=0):
         """
@@ -1125,56 +1189,71 @@ class OptionChain:
         :param i:
         :return:
         """
-        print(self.expirations[i])
-        return OptionChain(self.options.loc[self.options['expiration'] == self.expirations[i]])
+        _debug("Filter for expiration: ", self.expirations[i])
+        f = self.options.loc[self.options['expiration'] == self.expirations[i]]
+        if type(f) is pd.Series:
+            f = f.to_frame()
+        return OptionChain(f)
 
     # </editor-fold>
 
     # <editor-fold desc="Greeks">
 
     def greek(self, g, lower=0, upper=1):
-        """
+        f = self.options.loc[(lower <= self.options[g]) & (upper >= self.options[g])]
+        if type(f) is pd.Series:
+            f = f.to_frame()
+        return OptionChain(f)
 
-        :param g:       type of greek
-        :param lower:
-        :param upper:
-        :return:
-        """
-        ...
+    def greek_close_to(self, greek, d):
+        f = self.options.loc[min_closest_index(self.options[greek].to_list(), d)]
+        if type(f) is pd.Series:
+            f = f.to_frame()
+        return OptionChain(f)
 
-    def greek_close_to(self, d):
-        return min_closest_index(...)
-
-    def delta(self, lower=-1, upper=1):
+    # <editor-fold desc="sub greeks">
+    def delta_range(self, lower=-1, upper=1):
         return self.greek("delta", lower, upper)
 
-    def delta_close(self, d):
-        ...
+    def delta_close_to(self, d):
+        return self.greek_close_to("delta", d)
 
-    def gamma(self, lower=-1, upper=1):
+    def gamma_range(self, lower=-1, upper=1):
         return self.greek("gamma", lower, upper)
 
-    def gamma_close(self, d):
-        ...
+    def gamma_close_to(self, d):
+        return self.greek_close_to("gamma", d)
 
-    def theta(self, lower=-1, upper=1):
+    def theta_range(self, lower=-1, upper=1):
         return self.greek("theta", lower, upper)
 
-    def theta_close(self, d):
-        ...
+    def theta_close_to(self, d):
+        return self.greek_close_to("theta", d)
 
-    def vega(self, lower=-1, upper=1):
+    def vega_range(self, lower=-1, upper=1):
         return self.greek("vega", lower, upper)
 
-    def vega_close(self, d):
-        ...
+    def vega_close_to(self, d):
+        return self.greek_close_to("vega", d)
 
-    def rho(self, lower=-1, upper=1):
+    def rho_range(self, lower=-1, upper=1):
         return self.greek("rho", lower, upper)
     # </editor-fold>
+    # </editor-fold>
 
-    def iv(self, lower=0, upper=10000):
-        ...
+    # <editor-fold desc="IV">
+    def iv_range(self, lower=0, upper=10000):
+        f = self.options.loc[(lower <= self.options["IV"]) & (upper >= self.options["IV"])]
+        if type(f) is pd.Series:
+            f = f.to_frame()
+        OptionChain(f)
+
+    def iv_close_to(self, d):
+        f = self.options.loc[min_closest_index(self.options["IV"].to_list(), d)]
+        if type(f) is pd.Series:
+            f = f.to_frame()
+        return OptionChain(f)
+    # </editor-fold>
 
     # <editor-fold desc="File">
     def save_as_file(self):
