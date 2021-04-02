@@ -1239,11 +1239,9 @@ class OptionChain:
         else:
             contract_type = contracts[0]
 
-        # where is ATM? -> highest gamma
-        if prefiltered.options.loc[0, "gamma"] < 0:
-            atm_index = prefiltered.options["gamma"].argmin() # not working
-        else:
-            atm_index = prefiltered.options["gamma"].argmax()
+        # where is ATM? -> delta closest to 0.5
+        atm_index = np.asarray([abs(abs(g)-0.5) for g in prefiltered.options["delta"]]).argmax()
+
         if contract_type == "c":
 
             if moneyness == "ITM":
@@ -2195,6 +2193,7 @@ class VerticalDebitSpread(OptionStrategy):
 
     def _get_tasty_variation(self):
         """
+        TODO completely wrong strike
         :return: combined position(s)
         """
         tmp_chain = self.env.chain.expiration_close_to_dte(45)
@@ -2261,6 +2260,7 @@ class VerticalCreditSpread(OptionStrategy):
 
     def _get_tasty_variation(self):
         """
+        TODO both legs are long, dunno y
         :return: combined position(s)
         """
         tmp_chain = self.env.chain.expiration_close_to_dte(45).long()
