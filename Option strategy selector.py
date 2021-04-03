@@ -12,7 +12,7 @@ from copy import deepcopy
 
 pritn = print
 online = False
-debug = True
+debug = False
 
 
 def _warn(msg):
@@ -38,7 +38,7 @@ pd.options.mode.chained_assignment = None  # default='warn'
 # </editor-fold>
 
 ACCOUNT_BALANCE = 1471
-DEFAULT_THRESHOLD = -1
+DEFAULT_THRESHOLD = -1  # todo 0.3
 
 
 class RiskWarning(Warning):
@@ -154,6 +154,9 @@ def get_underlying_outlook(symbol):
     # use option chain data to get prob distribution of future price
     #   https://financial-hacker.com/the-mechanical-turk/#more-2974
     # yf.Ticker("AAPL").get_recommendations()
+
+    if not online:
+        return 0, 0, 0
 
     headers = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -457,13 +460,16 @@ def propose_strategies(ticker, defined_risk_only=True, avoid_events=True,
 
     env_con = EnvContainer(env, option_chain, u_bid, u_ask, ticker, min_sinle_opt_vol)
 
-    print(LongCall(env_con, threshold=DEFAULT_THRESHOLD))
+    print(LongCall(env_con, threshold=DEFAULT_THRESHOLD))  # todo change back
     print(LongPut(env_con, threshold=DEFAULT_THRESHOLD))
 
     print(CoveredCall(env_con))
 
-    print(VerticalDebitSpread(env_con))
-    print(VerticalCreditSpread(env_con))
+    print(VerticalDebitSpread(env_con, opt_type="c"))
+    print(VerticalCreditSpread(env_con, opt_type="c"))
+
+    print(VerticalDebitSpread(env_con, opt_type="p"))
+    print(VerticalCreditSpread(env_con, opt_type="p"))
 
     # <editor-fold desc="4 IV rank">
 
@@ -526,11 +532,11 @@ def high_ivr(ivr):
 
 
 def neutral_ivr(ivr):
-    return neutral(ivr / 50 - 1)
+    return neutral((ivr / 50) - 1)
 
 
 def low_ivr(ivr):
-    return 1 - high_ivr(ivr)
+    return -high_ivr(ivr)
 
 
 def low_rsi(rsi):
@@ -819,6 +825,10 @@ class Position:
     def __str__(self):
         return self.repr()
 
+    def short(self, t=0):
+        indent = "\t" * t
+        return f'{indent}{self.quantity:+d} {self.asset} = {self.cost:.2f} $'
+
     def repr(self, t=0):
         indent = "\t" * t
         return f'{indent}{self.quantity:+d} {self.asset} for a cost of {self.cost:.2f} $' \
@@ -1018,9 +1028,9 @@ class OptionChain:
                 self.expirations = []
                 self.ticker = None
 
-            #_debug(("-" * 73) + "Chain after filtering" + ("-" * 73))
-            #_debug("Expirations:", self.expirations, "\nLength:", len(self.options))
-            #_debug(self.options.head(5))
+            _debug(("-" * 73) + "Chain after filtering" + ("-" * 73))
+            _debug("Expirations:", self.expirations, "\nLength:", len(self.options))
+            _debug(self.options.head(5))
 
         else:
             self.expirations = list(chain_dict.keys())
@@ -1075,28 +1085,28 @@ class OptionChain:
     # <editor-fold desc="Type">
 
     def puts(self):
-        #_debug("Filter for puts")
+        _debug("Filter for puts")
         f = self.options.loc[self.options['contract'] == "p"]
         if type(f) is pd.Series:
             f = f.to_frame().T
         return OptionChain(f)
 
     def calls(self):
-        #_debug("Filter for calls")
+        _debug("Filter for calls")
         f = self.options.loc[self.options['contract'] == "c"]
         if type(f) is pd.Series:
             f = f.to_frame().T
         return OptionChain(f)
 
     def long(self):
-        #_debug("Filter for longs")
+        _debug("Filter for longs")
         f = self.options.loc[self.options['direction'] == "long"]
         if type(f) is pd.Series:
             f = f.to_frame().T
         return OptionChain(f)
 
     def short(self):
-        #_debug("Filter for shorts")
+        _debug("Filter for shorts")
         f = self.options.loc[self.options['direction'] == "short"]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1107,11 +1117,11 @@ class OptionChain:
     # <editor-fold desc="Expiry">
     def expiration_range(self, lower_dte, upper_dte):
         """
-
         :param lower_dte:
         :param upper_dte:
         :return: all options expiring between (inclusive) lower_dte and upper_dte
         """
+        _debug(f'Filter for expiration in range {lower_dte}-{upper_dte} DTE')
         dates = pd.date_range(start=datetime.now() + timedelta(days=lower_dte),
                               end=datetime.now() + timedelta(days=upper_dte),
                               normalize=True)
@@ -1127,6 +1137,8 @@ class OptionChain:
         :param exp_date: date as string YYYY-MM-DD
         :return:
         """
+        _debug(f'Filter for expiration before {exp_date}')
+
         f = self.options.loc[self.options['expiration'] <= exp_date]  # works because dates are in ISO form
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1138,7 +1150,7 @@ class OptionChain:
         :param exp_date: as string YYYY-MM-DD
         :return:
         """
-        #_debug("Exp date:", exp_date)
+        _debug("Filter for exp date:", exp_date)
         f = self.options.loc[[self.options['expiration'] == exp_date]]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1150,7 +1162,7 @@ class OptionChain:
         :param dte:
         :return:
         """
-        #_debug("Filter for expiration close to", dte, "dte")
+        _debug("Filter for expiration close to", dte, "dte")
         f = self.options.loc[self.options['expiration'] == get_closest_date(self.expirations, dte)]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1162,7 +1174,7 @@ class OptionChain:
         :param i:
         :return:
         """
-        #_debug("Filter for expiration: ", self.expirations[i])
+        _debug(f"Filter for {i}th expiration: ", self.expirations[i])
         f = self.options.loc[self.options['expiration'] == self.expirations[i]]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1173,12 +1185,14 @@ class OptionChain:
     # <editor-fold desc="Greeks">
 
     def greek(self, g, lower=0, upper=1):
+        _debug(f'Filter for {g} in range {lower}-{upper}')
         f = self.options.loc[(lower <= self.options[g]) & (upper >= self.options[g])]
         if type(f) is pd.Series:
             f = f.to_frame().T
         return OptionChain(f)
 
     def greek_close_to(self, greek, d):
+        _debug(f'Filter for {greek} close to {d}')
         f = self.options.loc[min_closest_index(self.options[greek].to_list(), d)]
         if type(f) is pd.Series:
             f = f.to_frame().T  # TODO ???
@@ -1216,7 +1230,7 @@ class OptionChain:
     # </editor-fold>
 
     # <editor-fold desc="Moneyness strike">
-    def _strike_n_itm_otm(self, n, moneyness, contract_default="c"):
+    def _strike_n_itm_otm(self, n, u_ask, moneyness, contract_default="c"):
         """
         TODO when filtering for short before this, gamma gets wrong and atm gets wrong
         :param contract_default:
@@ -1239,39 +1253,50 @@ class OptionChain:
         else:
             contract_type = contracts[0]
 
+        _debug(f'Filter for {n} {moneyness} strike on {contract_type}')
+
         # where is ATM? -> delta closest to 0.5
-        atm_index = np.asarray([abs(abs(g)-0.5) for g in prefiltered.options["delta"]]).argmax()
+        #atm_index = np.asarray([abs(abs(g)-0.5) for g in prefiltered.options["delta"]]).argmax()
+        #atm_index = min_closest_index(list(prefiltered.options["delta"]), 0.5)
+        atm_index = min_closest_index(list(prefiltered.options["strike"]), u_ask)
 
-        if contract_type == "c":
+        _debug(f'Detected ATM strike at {prefiltered.options.loc[atm_index, "strike"]}')
 
-            if moneyness == "ITM":
-                f = prefiltered.options.iloc[max(atm_index - n, 0), :]
-            if moneyness == "OTM":
-                f = prefiltered.options.iloc[min(atm_index + n, len(prefiltered.options)), :]
-
-        if contract_type == "p":
+        f = None
+        if contract_type == "c":  #5
 
             if moneyness == "ITM":
-                f = prefiltered.options.iloc[min(atm_index + n, len(prefiltered.options)), :]
+                f = prefiltered.options.iloc[max(atm_index - n - 1, 0), :]
             if moneyness == "OTM":
-                f = prefiltered.options.iloc[max(atm_index - n, 0), :]
+                f = prefiltered.options.iloc[min(atm_index + n + 1, len(prefiltered.options)), :]
+
+        if contract_type == "p":  #3
+
+            if moneyness == "ITM":
+                f = prefiltered.options.iloc[min(atm_index + n + 1, len(prefiltered.options)), :]
+            if moneyness == "OTM":
+                f = prefiltered.options.iloc[max(atm_index - n - 1, 0), :]
 
         if type(f) is pd.Series:
             f = f.to_frame().T
 
+        if True:
+            _debug(f'Filtering for moneyness strike returned this for {n} {moneyness} on {contract_type}:')
+            _debug(f.head(5))
+
         return OptionChain(f)
 
-    def n_itm_strike_put(self, n):
-        return self._strike_n_itm_otm(n, "ITM", contract_default="p")
+    def n_itm_strike_put(self, n, u_ask):
+        return self._strike_n_itm_otm(n, u_ask, "ITM", contract_default="p")
 
-    def n_otm_strike_put(self, n):
-        return self._strike_n_itm_otm(n, "OTM", contract_default="p")
+    def n_otm_strike_put(self, n, u_ask):
+        return self._strike_n_itm_otm(n, u_ask, "OTM", contract_default="p")
 
-    def n_itm_strike_call(self, n):
-        return self._strike_n_itm_otm(n, "ITM")
+    def n_itm_strike_call(self, n, u_ask):
+        return self._strike_n_itm_otm(n, u_ask, "ITM")
 
-    def n_otm_strike_call(self, n):
-        return self._strike_n_itm_otm(n, "OTM")
+    def n_otm_strike_call(self, n, u_ask):
+        return self._strike_n_itm_otm(n, u_ask, "OTM")
 
     # </editor-fold>
 
@@ -1288,6 +1313,22 @@ class OptionChain:
             f = f.to_frame().T
         return OptionChain(f)
 
+    # </editor-fold>
+
+    # <editor-fold desc="p(ITM)">
+    def itm_prob_close_to(self, p):
+        _debug(f'Filter for P(ITM) close to {p}')
+        f = self.options.loc[min_closest_index(self.options["P(ITM)"].to_list(), p)]
+        if type(f) is pd.Series:
+            f = f.to_frame().T  # TODO ???
+        return OptionChain(f)
+
+    def itm_prob_range(self, g, lower=0, upper=1):
+        _debug(f'Filter for {g} in range {lower}-{upper}')
+        f = self.options.loc[(lower <= self.options["P(ITM)"]) & (upper >= self.options["P(ITM)"])]
+        if type(f) is pd.Series:
+            f = f.to_frame().T
+        return OptionChain(f)
     # </editor-fold>
 
     # <editor-fold desc="File">
@@ -1316,9 +1357,15 @@ class OptionChain:
             print("While reading the file", filename, "an exception occurred:", e)
     # </editor-fold>
 
-    # </editor-fold>
-
-    # <editor-fold desc="Strats">
+    def remove_by_name(self, used_chain):
+        """
+        Removes all elements from chain that share their name with the first element of used_chain
+        :param used_chain:
+        :return:
+        """
+        name = used_chain.options.loc[list(used_chain.options.index.values)[0], "name"]
+        tmp_chain = self.options.drop(self.options[self.options["name"] == name].index)
+        return OptionChain(chain=tmp_chain)
 
 
 # todo TEST!
@@ -1358,17 +1405,53 @@ class CombinedPosition:
 
         self.greeks = self.get_greeks()
 
-    def __str__(self):
+    def __repr__(self):
         return self.repr()
 
-    def __repr__(self):
+    def repr(self, t=0, short=True):
+        indent = "\t" * t
         s = ""
         for key, val in self.pos_dict.items():
             if val.quantity != 0:
-                 s += f'Position {key}: {val}, '
-        return s[:-2]
+                if short:
+                    s += f'{indent}{val.short(t=t + 1)}\n'
+                else:
+                    s += f'\n' \
+                        f'{indent}Position {key}:' \
+                        f'\n\n' \
+                        f'{indent}{val.short(t=t + 1)}' \
+                        f'\n' \
+                        f'{indent}{"." * 300}' \
+                        f'\n'
 
-    def repr(self, t=0):
+        return f'\n\n' \
+            f'{s}' \
+            f'\n' \
+            f'{indent}   Cumulative strategy cost: {self.cost:.2f} $' \
+            f'\n' \
+            f'\n' \
+            f'{indent}          Cumulative Greeks: ' \
+            f'Δ = {self.greeks["delta"]:+.5f}   ' \
+            f'Γ = {self.greeks["gamma"]:+.5f}   ' \
+            f'ν = {self.greeks["vega"]:+.5f}    ' \
+            f'Θ = {self.greeks["theta"]:+.5f}   ' \
+            f'ρ = {self.greeks["rho"]:+.5f}     ' \
+            f'\n' \
+            f'{indent}                Theta/Delta: {self.greeks["theta"] / abs(self.greeks["delta"]):+.5f}' \
+            f'\n' \
+            f'{indent}                   Max risk: {self.risk:.2f} $' \
+            f'\n' \
+            f'{indent}                        BPR: {self.bpr:.2f} $' \
+            f'\n' \
+            f'\n' \
+            f'{indent}       Break even on expiry: {self.break_even:.2f} $' \
+            f'\n' \
+            f'{indent}                 Max profit: {self.max_profit:.2f} $' \
+            f'\n' \
+            f'{indent}Return on margin (TP @ 50%): {self.rom:.2f}' \
+            f'\n\n'
+
+    def detail(self, t=0):
         """
         :return: string representation
         """
@@ -1396,6 +1479,8 @@ class CombinedPosition:
                f'Θ = {self.greeks["theta"]:+.5f}   ' \
                f'ρ = {self.greeks["rho"]:+.5f}     ' \
                f'\n' \
+               f'{indent}                Theta/Delta: {self.greeks["theta"]/self.greeks["delta"]:+.5f}' \
+               f'\n' \
                f'{indent}                   Max risk: {self.risk:.2f} $' \
                f'\n' \
                f'{indent}                        BPR: {self.bpr:.2f} $' \
@@ -1408,7 +1493,8 @@ class CombinedPosition:
                f'{indent}Return on margin (TP @ 50%): {self.rom:.2f}' \
                f'\n' \
                f'{indent}{"-" * 300}' \
-               f'\n\n'
+               f'\n' \
+            f'\n'
 
     def update_status(self):
         self.cost = self.get_cost()
@@ -1555,8 +1641,13 @@ class CombinedPosition:
                     # update risk
                     risk += \
                         longs_w_cov_score[0][0].cost / 100 + \
-                        position_to_cover.cost / 100 + \
-                        (position_to_cover.asset.strike - longs_w_cov_score[0][0].asset.strike)
+                        position_to_cover.cost / 100
+
+                    if position_to_cover.asset.opt_type == "c":
+                        risk += (position_to_cover.asset.strike - longs_w_cov_score[0][0].asset.strike)
+
+                    if position_to_cover.asset.opt_type == "p":
+                        risk -= (position_to_cover.asset.strike - longs_w_cov_score[0][0].asset.strike)
 
                     # update long quantities
                     long_q = longs_w_cov_score[0][0].quantity
@@ -1802,7 +1893,9 @@ class OptionStrategy:
         self.position_builder = position_builder  # name of the method that returns the position
         self.positions = None
         self.conditions = conditions
-        self.env = env
+        self.env_container = env
+        # self.env_container.chain = deepcopy(self.env_container.chain)
+        self.recommendation = 0
 
         self.close_dte = 21
         self.close_perc = 50
@@ -1815,13 +1908,51 @@ class OptionStrategy:
         self.sl_percentage = sl_perc
         self.threshold = threshold
 
-        self.get_positions(self.env)
+        self.get_positions(self.env_container)
 
     def __repr__(self):
         return self.name
 
     def __str__(self):
-        return self.repr(t=10)
+        return self.short(t=0)
+
+    def short(self, t=0):
+        indent = ("\t" * t)  # todo add greek exp in pretty
+
+        if self.positions is None:
+            return f'{indent}Empty {self.name}'
+
+        h = "\n"
+        for hint in self.hints:
+            h += f'{indent}           {hint}\n'
+
+        return f'\n' \
+            f'{indent}{"-" * 300}' \
+            f'\n' \
+            f'{indent}{self.name} for {self.positions.underlying} ({(self.recommendation*100):+3.2f}%):' \
+            f'\n' \
+            f'{indent}{"-" * 300}' \
+            f'{indent}{self.positions.repr(t=t + 1)}' \
+            f'{indent}Greek exposure:' \
+            f'\n' \
+            f'{indent}\tΔ = {self.greek_exposure["delta"]}' \
+            f'\n' \
+            f'{indent}\tΓ = {self.greek_exposure["gamma"]}' \
+            f'\n' \
+            f'{indent}\tν = {self.greek_exposure["vega"]}' \
+            f'\n' \
+            f'{indent}\tΘ = {self.greek_exposure["theta"]}' \
+            f'\n' \
+            f'{indent}\tρ = {self.greek_exposure["rho"]}' \
+            f'\n' \
+            f'\n' \
+            f'{indent} Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} DTE)' \
+            f'\n' \
+            f'{indent}      P50: {self.positions.p50 * 100} %' \
+            f'\n' \
+            f'{indent}Stop loss: {self.sl_percentage / 100 * self.positions.risk:.2f} $' \
+            f'\n' \
+            f'{indent}    Hints: {h}'
 
     def repr(self, t=0):
 
@@ -1903,9 +2034,11 @@ class OptionStrategy:
             _warn("Cannot set strategy greeks because no positions are existing yet")
 
     def get_positions(self, env: EnvContainer):
-        e = self._test_environment(env.env)
-        if e >= self.threshold:
-            _debug(f'Threshold of {self.threshold} for {self.name} was reached: {e} > {self.threshold}')
+        self.recommendation = self._test_environment(env.env)
+        if self.recommendation >= self.threshold:
+            _debug(f'Threshold of {self.threshold} for {self.name} was reached: '
+                   f'{self.recommendation} > {self.threshold}')
+            _debug(f'Start building {self.name}')
             self.positions = self.position_builder()
             if not self._check_vol():
                 self.positions = None
@@ -1914,7 +2047,8 @@ class OptionStrategy:
             self._set_close_date()
             self._set_p50()
         else:
-            _debug(f'Threshold of {self.threshold} for {self.name} was not reached: {e:+.5f} < {self.threshold}')
+            _debug(f'Threshold of {self.threshold} for {self.name} was not reached: '
+                   f'{self.recommendation:+.5f} < {self.threshold}')
 
     def _set_close_date(self):
         if self.positions:
@@ -1937,9 +2071,9 @@ class OptionStrategy:
     def _check_vol(self):
 
         for name, pos in self.positions.pos_dict.items():
-            if type(pos.asset) is Option and pos.asset.vol < self.env.min_per_option_vol:
-                _debug(f'{self.name} on {self.env.ticker} failed to meet individual volume requirements: '
-                       f'{pos.asset.vol} < {self.env.min_per_option_vol}')
+            if type(pos.asset) is Option and pos.asset.vol < self.env_container.min_per_option_vol:
+                _debug(f'{self.name} on {self.env_container.ticker} failed to meet individual volume requirements: '
+                       f'{pos.asset.vol} < {self.env_container.min_per_option_vol}')
                 return False
         return True
 
@@ -2018,17 +2152,17 @@ class LongCall(OptionStrategy):
         :return: combined position(s)
         """
         if self.short_term:
-            df = self.env.chain \
+            df = self.env_container.chain \
                 .calls() \
                 .expiration_close_to_dte(7) \
                 .delta_close_to(0.45)
         else:
-            df = self.env.chain \
+            df = self.env_container.chain \
                 .calls() \
                 .expiration_close_to_dte(60) \
                 .delta_close_to(0.45)
 
-        cp = CombinedPosition(dict(), self.env.u_bid, self.env.u_ask, self.env.ticker)
+        cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker)
         cp.add_option_from_option_chain(df)
 
         return cp
@@ -2072,17 +2206,17 @@ class LongPut(OptionStrategy):
         :return: combined position(s)
         """
         if self.short_term:
-            df = self.env.chain \
+            df = self.env_container.chain \
                 .puts() \
                 .expiration_close_to_dte(7) \
                 .delta_close_to(0.45)
         else:
-            df = self.env.chain \
+            df = self.env_container.chain \
                 .puts() \
                 .expiration_close_to_dte(60) \
                 .delta_close_to(0.45)
 
-        cp = CombinedPosition(dict(), self.env.u_bid, self.env.u_ask, self.env.ticker)
+        cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker)
         cp.add_option_from_option_chain(df)
 
         return cp
@@ -2106,19 +2240,7 @@ class CoveredCall(OptionStrategy):
             "mid term outlook": [neutral, bullish],
         }
 
-        self.hints = ["Always set a take profit!", "It's just money :)",
-                      "CLOSING We close covered calls when the stock price has gone well past"
-                      " our short call, as that usually yields close to max profit. We may also consider closing a "
-                      "covered call if the stock price drops significantly and our assumption changes. MANAGING We "
-                      "roll a covered call when our assumption remains the same (that the price of the stock will "
-                      "continue to rise). We look to roll the short call when there is little to no extrinsic value "
-                      "left. For instance, if the stock price remains roughly the same as when we executed the trade, "
-                      "we can roll the short call by buying back our short option, and selling another call on the same"
-                      " strike in a further out expiration. We will also roll our call down if the stock price drops. "
-                      "This allows us to collect more premium, and reduce our max loss & "
-                      "breakeven point. We are always cognizant of our current breakeven point, and we do not roll our "
-                      "call down further than that. Doing so can lock in a loss if the stock price actually comes back "
-                      "up and leaves our call ITM."]
+        self.hints = ["Always set a take profit!", "It's just money :)"]
 
         self.tp_percentage = 50
         self.sl_percentage = 100
@@ -2142,16 +2264,16 @@ class CoveredCall(OptionStrategy):
         :param chain:
         :return: combined position(s)
         """
-        oc = self.env.chain \
+        oc = self.env_container.chain \
             .calls()\
             .short() \
             .expiration_close_to_dte(45) \
             .delta_close_to(0.3)  # shouldnt this be -0.3???
 
-        cp = CombinedPosition(dict(), self.env.u_bid, self.env.u_ask, self.env.ticker)
+        cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker)
 
         cp.add_option_from_option_chain(oc)
-        cp.add_asset(Stock(self.env.ticker, self.env.u_bid, self.env.u_ask), 100)
+        cp.add_asset(Stock(self.env_container.ticker, self.env_container.u_bid, self.env_container.u_ask), 100)
 
         return cp
 
@@ -2164,6 +2286,7 @@ class VerticalDebitSpread(OptionStrategy):
         :param threshold: test_env must be greater than treshold in order to start building the position
         """
         self.opt_type = opt_type
+        self.name = f'Vertical {"Call" if opt_type == "c" else "Put"} Debit Spread'
 
         self.threshold = threshold
         self.position_builder = self._get_tasty_variation
@@ -2196,19 +2319,22 @@ class VerticalDebitSpread(OptionStrategy):
         TODO completely wrong strike
         :return: combined position(s)
         """
-        tmp_chain = self.env.chain.expiration_close_to_dte(45)
-
         # todo not working bc atm through gamma gets wrong bc of -gamma of shorts
+
+        chain = deepcopy(self.env_container.chain)
+
         # buy 1 ITM, sell 1-2 OTM
         if self.opt_type == "c":
-            long_leg = tmp_chain.long().n_itm_strike_call(1)
-            short_leg = tmp_chain.short().n_otm_strike_call(2)
+            long_leg = chain.expiration_close_to_dte(45).long().n_itm_strike_call(1, self.env_container.u_ask)
+            chain = chain.remove_by_name(long_leg)
+            short_leg = chain.expiration_close_to_dte(45).short().n_otm_strike_call(1, self.env_container.u_ask)
         else:
-            long_leg = tmp_chain.long().n_itm_strike_put(1)
-            short_leg = tmp_chain.short().n_otm_strike_put(2)
+            long_leg = chain.expiration_close_to_dte(45).long().n_itm_strike_put(1, self.env_container.u_ask)
+            chain = chain.remove_by_name(long_leg)
+            short_leg = chain.expiration_close_to_dte(45).short().n_otm_strike_put(1, self.env_container.u_ask)
 
         # combined pos
-        cp = CombinedPosition(dict(), self.env.u_bid, self.env.u_ask, self.env.ticker)
+        cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker)
         cp.add_option_from_option_chain(long_leg)
         cp.add_option_from_option_chain(short_leg)
 
@@ -2221,15 +2347,21 @@ class VerticalDebitSpread(OptionStrategy):
 
 class VerticalCreditSpread(OptionStrategy):
     name = "Vertical Credit Spread"
+    # bullish = put spread
+    # bearish = call spread
 
-    def __init__(self, env: EnvContainer = None, threshold=DEFAULT_THRESHOLD, opt_type="c"):
+    def __init__(self, env: EnvContainer = None, threshold=DEFAULT_THRESHOLD, opt_type="c", variation="tasty"):
         """
         :param threshold: test_env must be greater than treshold in order to start building the position
         """
         self.opt_type = opt_type
+        self.name = f'Vertical {"Call" if opt_type == "c" else "Put"} Credit Spread'
 
         self.threshold = threshold
-        self.position_builder = self._get_tasty_variation
+        if variation == "tasty":
+            self.position_builder = self._get_tasty_variation
+        if variation == "personal":
+            self.position_builder = self._get_personal_variation
         self.conditions = {
             "IV": [high_ivr],
 
@@ -2258,25 +2390,38 @@ class VerticalCreditSpread(OptionStrategy):
                          threshold=threshold,
                          env=env)
 
-    def _get_tasty_variation(self):
+    def _get_tasty_variation(self):  # todo prevent both legs beeing identical
         """
         TODO both legs are long, dunno y
         :return: combined position(s)
         """
-        tmp_chain = self.env.chain.expiration_close_to_dte(45).long()
 
-        f = 1
+        chain = deepcopy(self.env_container.chain)
+
+        if self.opt_type == "c":
+
+            # buy 20-25 delta
+            long_leg = chain.expiration_close_to_dte(45).calls().long().delta_close_to(0.25)
+
+            # remove long leg
+            chain = chain.remove_by_name(long_leg)
+
+            # sell 30-35 delta
+            short_leg = chain.expiration_close_to_dte(45).calls().short().delta_close_to(0.3)
+
         if self.opt_type == "p":
-            f = -1
 
-        # buy 20-25 delta
-        long_leg = tmp_chain.delta_close_to(0.25 * f)
+            # buy 20-25 delta
+            long_leg = chain.expiration_close_to_dte(45).puts().long().delta_close_to(0.25)
 
-        # sell 30-35 delta
-        short_leg = tmp_chain.delta_close_to(0.3 * f)
+            # remove long leg
+            chain = chain.remove_by_name(long_leg)
+
+            # sell 30-35 delta
+            short_leg = chain.expiration_close_to_dte(45).puts().short().delta_close_to(0.3)
 
         # combined pos
-        cp = CombinedPosition(dict(), self.env.u_bid, self.env.u_ask, self.env.ticker)
+        cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker)
         cp.add_option_from_option_chain(long_leg)
         cp.add_option_from_option_chain(short_leg)
 
@@ -2285,6 +2430,9 @@ class VerticalCreditSpread(OptionStrategy):
             0.5 * 100 * abs(long_leg.options.loc[0, "strike"] - short_leg.options.loc[0, "strike"]) / cp.max_profit
 
         return cp
+
+    def _get_personal_variation(self):
+        return None
 
 
 # todo
@@ -2362,7 +2510,7 @@ class ShortStrangle(OptionStrategy):
     ...
 
 
-# </editor-fold>
+# </editor-fold>CLO
 
 
 propose_strategies("AMC")
