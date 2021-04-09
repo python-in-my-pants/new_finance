@@ -1,3 +1,5 @@
+import io
+import os
 import urllib.request
 from bs4 import BeautifulSoup
 import yfinance as yf
@@ -10,15 +12,27 @@ import warnings
 import pickle
 from copy import deepcopy
 from eu_option import EuroOption
+from matplotlib import pyplot as plt
+from typing import Optional
+import matplotlib.ticker as plticker
+from pprint import pprint as pp
+from yahoo_fin import stock_info as si
 
+"""
+import ipdb
+ipdb.set_trace()
+"""
 
 pritn = print
-online = True
-get_chain = True
+
+online = True  # all are acn
+force_chain_download = True and online
+force_meta_download = True and online
+
 debug = True
 
 ACCOUNT_BALANCE = 1471
-DEFAULT_THRESHOLD = 0.3  # todo 0.3
+DEFAULT_THRESHOLD = 0.3
 
 
 # <editor-fold desc="Miscellaneous">
@@ -49,8 +63,9 @@ class DDict(dict):
 
 class RiskWarning(Warning):
     pass
-# </editor-fold>
 
+
+# </editor-fold>
 
 # <editor-fold desc="Pandas settings">
 pd.set_option("display.max_rows", None, "display.max_columns", None)
@@ -60,6 +75,14 @@ pd.set_option('display.float_format', lambda x: '%.5f' % x)
 pd.options.mode.chained_assignment = None  # default='warn'
 # </editor-fold>
 
+# <editor-fold desc="Pyplot settings">
+plt.rc('figure', facecolor="#333333", edgecolor="#333333")
+plt.rc('axes', facecolor="#353535", edgecolor="#000000")
+plt.rc('lines', color="#393939")
+plt.rc('grid', color="#121212")
+
+
+# </editor-fold>
 
 # <editor-fold desc="Libor">
 def get_libor_rates():
@@ -91,15 +114,35 @@ def get_risk_free_rate(annualized_dte):
 
 libor_rates = get_libor_rates() if online else [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
 libor_expiries = (1, 7, 30, 61, 92, 182, 365)
+
+
 # </editor-fold>
 
+# <editor-fold desc="Data requests">
 
-def get_sp500_tickers(exclude_sub_industries=('Pharmaceuticals',
-                                              'Managed Health Care',
-                                              'Health Care Services')):
-    df = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]
-    df = df[~df['GICS Sub-Industry'].isin(exclude_sub_industries)]
-    return df['Symbol'].values.tolist()
+def get_price_sector_yf(ticker, yf_obj):
+    # define fallback values
+    u_price, u_bid, u_ask, sector = 0, 0, 0, ""
+
+    if online:
+        try:
+            u_price = yf_obj.info["ask"]
+
+            u_bid = yf_obj.info["bid"]
+            u_ask = yf_obj.info["ask"]
+
+            if "sector" in yf_obj.info.keys():
+                sector = yf_obj.info["sector"]
+            else:
+                sector = ""
+
+        except ValueError as e:
+            _warn(f'No data found for ticker {ticker}: {e}')
+
+        except KeyError as e:
+            _warn(f'Key error when accessing data for {ticker}: {e}')
+
+    return u_price, u_bid, u_ask, sector
 
 
 # barchart.com
@@ -117,15 +160,22 @@ def get_options_meta_data(symbol):
         next_earnings = ""
 
         for i, t in enumerate(text):
-            if "IV Rank" in t and "%" in text[i + 2]:
-                ivr = float(text[i + 2].replace("%", ""))
-            if "Volume Avg (30-Day)" in t and vol30 == 0:  # option volume
-                vol30 = int(text[i + 2].replace(",", ""))
-            if "Open Int (30-Day)" in t and oi30 == 0:
-                oi30 = int(text[i + 2].replace(",", ""))
-            if "Next Earnings Date" in t and not next_earnings:
-                # print(text[i+1], text[i+2], text[i+3])
-                next_earnings = text[i + 2].replace(" ", "")
+            try:
+                if 'IV Rank' in t and "%" in text[i + 2]:
+                    ivr = float(text[i + 2].replace("%", ""))
+                if 'Volume Avg (30-Day)' in t and vol30 == 0:  # option volume
+                    vol30 = int(text[i + 2].replace(",", ""))
+                if 'Open Int (30-Day)' in t and oi30 == 0:
+                    oi30 = int(text[i + 2].replace(",", ""))
+            except Exception as e:
+                _warn(f"Getting options meta data failed for ticker {symbol} with exception: {e}")
+
+            try:
+                if "Next Earnings Date" in t and not next_earnings:
+                    # print(text[i+1], text[i+2], text[i+3])
+                    next_earnings = text[i + 2].replace(" ", "")
+            except Exception as e:
+                _warn(f'Getting next earnigns date failed for ticker {symbol} with exception: {e}')
 
         return ivr, vol30, oi30, next_earnings
 
@@ -201,21 +251,34 @@ def get_underlying_outlook(symbol):
                 tmp = tmp.replace("Sell", "")
             outlooks[i] = fac * float(tmp) / 100
 
-    return outlooks[0], outlooks[1], outlooks[2]
+    # -----------------------------------------------------------------------------------------------------------------
+
+    req = urllib.request.Request('https://www.barchart.com/stocks/quotes/' + symbol + '/analyst-ratings',
+                                 headers=headers)
+    with urllib.request.urlopen(req) as response:
+        resp_text = response.read()
+        soup = BeautifulSoup(resp_text, 'html.parser')
+
+        analyst_rating = soup.findAll("div", attrs={'class': 'block__average_value'})[3].find("span").text
+
+        analyst_rating = (float(analyst_rating) - 3) / 2
+
+    return outlooks[0], outlooks[1], outlooks[2], analyst_rating
 
 
-def get_option_chain(yf_obj):
+def get_option_chain(yf_obj, u_ask, save=True, min_vol=0):
     # contractSymbol  lastTradeDate  strike  lastPrice    bid    ask  change  percentChange   volume  openInterest
     # ... impliedVolatility  inTheMoney contractSize currency
 
     start = datetime.now()
 
-    if not get_chain:
-        return OptionChain.from_file(filename=yf_obj.ticker + "_chain")
+    if os.path.isfile("C:\\Users\\User\\PycharmProjects\\Finance\\Options\\chains\\"
+                      + yf_obj.ticker + "_chain.pickle") and not force_chain_download:  # if not get_chain:
+        return OptionChain.from_file(filename=yf_obj.ticker + "_chain").volume(min_vol)
 
     option_chain = DDict()
     ticker_data = yf_obj
-    underlying_ask = float(yf_obj.info["ask"])
+    underlying_ask = u_ask
     expirations = [datetime.strptime(t, "%Y-%m-%d") for t in ticker_data.options]
     relevant_fields = ["name", "strike", "bid", "ask", "mid", "last", "volume", "OI",
                        "IV", "gearing", "P(ITM)", "delta", "gamma", "vega", "theta", "rho"]
@@ -273,7 +336,12 @@ def get_option_chain(yf_obj):
 
         print(f'Collecting option chain for {ticker_data.info["symbol"]} {exp_string} ...')
 
-        chain = ticker_data.option_chain(exp_string)
+        res = ticker_data.option_chain(exp_string)
+
+        chain = DDict({
+            "puts": res.puts.loc[(res.puts["ask"] > 0)],
+            "calls": res.calls.loc[(res.calls["ask"] > 0)]
+        })
         dte = float((expiration.date() - date.today()).days) / 365
 
         chain.puts.rename(columns={"impliedVolatility": "IV",
@@ -287,28 +355,160 @@ def get_option_chain(yf_obj):
                                     "lastPrice": "last"},
                            inplace=True)
 
+        chain.puts.fillna(0, inplace=True)
+        chain.calls.fillna(0, inplace=True)
+
         populate_greeks(chain.calls, dte, "c")
         populate_greeks(chain.puts, dte, "p")
 
-        chain.puts.fillna(0, inplace=True)
-        chain.calls.fillna(0, inplace=True)
+        chain.puts.reset_index(inplace=True, drop=True)
+        chain.calls.reset_index(inplace=True, drop=True)
 
         chain.puts.astype({"volume": int}, copy=False)
         chain.calls.astype({"volume": int}, copy=False)
 
-        option_chain[exp_string] = DDict(
-            {"puts": chain.puts[relevant_fields], "calls": chain.calls[relevant_fields]})
+        option_chain[exp_string] = DDict({
+            "puts": chain.puts[relevant_fields],
+            "calls": chain.calls[relevant_fields]
+        })
 
     print("Gathering options data took", (datetime.now() - start).total_seconds(), "seconds")
 
-    return OptionChain(chain_dict=option_chain)
+    return OptionChain(chain_dict=option_chain, save=save).volume(min_vol)
+
+
+# </editor-fold>
+
+# <editor-fold desc="Meta data routine">
+class MetaData:
+
+    def __init__(self, ticker, u_price, bid, ask, option_chain, ivr, sector, vol30, oi30, next_earnings,
+                 rsi20, short_outlook, mid_outlook, long_outlook, analyst_rating, yf_obj: yf.Ticker = None):
+        self.mid_outlook = mid_outlook
+        self.ticker = ticker
+        self.u_price = u_price
+        self.u_bid = bid
+        self.u_ask = ask
+        self.option_chain = option_chain
+        self.ivr = ivr
+        self.sector = sector
+        self.vol30 = vol30
+        self.oi30 = oi30
+        self.next_earnings = next_earnings
+        self.rsi20 = rsi20
+        self.short_outlook = short_outlook
+        self.mid_outlook = mid_outlook
+        self.long_outlook = long_outlook
+        self.analyst_rating = analyst_rating
+        self.yf_obj = yf_obj
+
+    def save_as_file(self):
+
+        filename = self.ticker + "_meta"
+
+        try:
+            print(f'Creating file:\n'
+                  f'\t{filename}.pickle ...')
+
+            with open("meta/" + filename + ".pickle", "wb") as file:
+                pickle.dump(self, file)
+
+            print("File created successfully!")
+
+        except Exception as e:
+            print("While creating the file", filename, "an exception occurred:", e)
+
+    @staticmethod
+    def from_file(filename):
+        try:
+            f = pickle.load(open("meta/" + filename + ".pickle", "rb"))
+            return f
+        except Exception as e:
+            print("While reading the file", filename, "an exception occurred:", e)
+
+
+def get_meta_data(ticker, min_single_opt_vol=0) -> Optional[MetaData]:
+
+    file_exists = os.path.isfile("C:\\Users\\User\\PycharmProjects\\Finance\\Options\\meta\\" + ticker + "_meta.pickle")
+
+    if not online:
+        if file_exists:  # offline, file exists, read from it
+            return MetaData.from_file(ticker + "_meta")
+        else:  # offline and no file
+            _warn(f'No meta data available for ticker {ticker} (offline and no file around)')
+            return None
+    else:
+        if not force_meta_download and file_exists:  # online and no force, read file
+            return MetaData.from_file("meta/" + ticker + "_meta.pickle")
+        else:
+            # online, force download (could still be junk data)
+            meta = download_meta_data(ticker, min_single_opt_vol)
+            if meta is not None:
+                meta.save_as_file()
+            return meta
+
+
+def download_meta_data(ticker, min_single_opt_vol=0) -> Optional[MetaData]:
+
+    if online:
+        yf_obj = yf.Ticker(ticker)
+    else:
+        _warn(f'Unable to download yahoo finance object, are you offline and forcing download?')
+        return None
+
+    # get stock data (yahoo and barchart)
+    # do this before requesting option chain beacause we need a underlying price for this
+
+    u_price, u_bid, u_ask, sector = get_price_sector_yf(ticker, yf_obj)  # yahoo
+    ivr, vol30, oi30, next_earnings = get_options_meta_data(ticker)  # barchart
+
+    if u_price == 0:
+
+        try:
+            last_price = si.get_live_price(ticker)
+            u_price = last_price
+            u_bid = last_price
+            u_ask = last_price
+        except Exception as e:
+            print(f'Exception in getting fallback ticker price: {e}')
+
+        if u_price == 0:
+            _warn(f"[{ticker}] Data sources reporting 0 price for underlying. Data is likely false, exiting ...")
+            return None
+
+    # most likely point of failure due to low option volume
+    option_chain = get_option_chain(yf_obj, u_ask=u_price, save=True, min_vol=min_single_opt_vol)  # save was = not auto
+
+    if option_chain.empty():
+        _warn(f'No options with high enough volume found for ticker {ticker}')
+        return None
+
+    # request to barchart.com
+    rsi20 = get_rsi20(ticker)
+
+    # request to barchart.com
+    short_outlook, mid_outlook, long_outlook, analyst_rating = get_underlying_outlook(ticker)
+
+    return MetaData(ticker, u_price, u_bid, u_ask, option_chain, ivr, sector, vol30, oi30, next_earnings, rsi20,
+                    short_outlook, mid_outlook, long_outlook, analyst_rating, yf_obj=yf_obj)
+# </editor-fold>
 
 
 class StrategyConstraints:
 
     def __init__(self, defined_risk_only=True, avoid_events=True,
-                 min_vol30=25000, min_oi30=5000, min_sinle_opt_vol=50,
+                 min_vol30=25000, min_oi30=5000, min_sinle_opt_vol=100,
                  strict_mode=False, assignment_must_be_possible=False):
+        """
+
+        :param defined_risk_only:
+        :param avoid_events:
+        :param min_vol30:
+        :param min_oi30:
+        :param min_sinle_opt_vol:
+        :param strict_mode:
+        :param assignment_must_be_possible:
+        """
         self.assignment_must_be_possible = assignment_must_be_possible
         self.strict_mode = strict_mode
         self.min_sinle_opt_vol = min_sinle_opt_vol
@@ -318,15 +518,25 @@ class StrategyConstraints:
         self.defined_risk_only = defined_risk_only
 
 
-# type, positions, credit/debit, max risk, break even on exp, max prof, bpr, return on margin with 50% tp,
-# close by date
-# use monte carlo sim for P50,
-def propose_strategies(ticker, strat_cons=StrategyConstraints()):
+def propose_strategies(ticker: str, strat_cons: StrategyConstraints, auto: bool = False):
     # todo get short term price outlook (technical analysis, resistances from barchart.com etc)
 
     # todo supply custom environment (like outlooks)
 
     # todo supply max risk limit, min gain, min pop, min p50, min expected return (0?) per position
+
+    # todo substract spread of P/L graphs of positions, add it to cost
+
+    # todo tkinter gui
+
+    # todo watch out for dividends (yfinance actions?)
+
+    # todo do sth if ask is 0 (stock or option)
+    # should be done by filtering out options with 0 ask in get_option_chain
+
+    ticker = ticker.upper()
+
+    print(f'\nChecking ticker {ticker} ...\n')
 
     print(f'Settings:\n\n'
           f'          Defined risk only: {strat_cons.defined_risk_only}\n'
@@ -337,62 +547,24 @@ def propose_strategies(ticker, strat_cons=StrategyConstraints()):
           f'                Strict mode: {strat_cons.strict_mode}\n'
           f'Assignment must be possible: {strat_cons.assignment_must_be_possible}\n')
 
-    # <editor-fold desc="Get info">
-    if online:
-        yf_obj = yf.Ticker(ticker)
-        u_price = yf_obj.info["ask"]
-        u_bid = yf_obj.info["bid"]
-        u_ask = yf_obj.info["ask"]
-        if "sector" in yf_obj.info.keys():
-            sector = yf_obj.info["sector"]
-        else:
-            sector = ""
-    else:
-        class Dummy:
-            def __init__(self):
-                self.ticker = ticker
-                self.info = DDict({"bid": -1, "ask": -1})
+    meta = get_meta_data(ticker, strat_cons.min_sinle_opt_vol)
 
-        yf_obj = Dummy()
-        u_price = 10
-        u_bid = 9
-        u_ask = 10
-        sector = ""
-
-    if u_price == 0:
-        _warn("Data source reporting 0 price for underlying. Data is likely false, exiting ...")
-        exit(-1)
-
-    option_chain = get_option_chain(yf_obj)
-    expirations = option_chain.expirations
-
-    """
-        import ipdb
-        ipdb.set_trace()
-        """
-
-    if online:
-        ivr, vol30, oi30, next_earnings = get_options_meta_data(ticker)
-        rsi20 = get_rsi20(ticker)
-    else:
-        ivr, vol30, oi30, next_earnings, rsi20 = 9.7, 26000, 7000, "01/01/30", 50
-
-    short_outlook, mid_outlook, long_outlook = get_underlying_outlook(ticker)
-
-    # </editor-fold>
+    if meta is None:
+        _warn(f'Receiving empty data for ticker {ticker}!')
+        return []
 
     print(f'Stock info:\n\n'
-          f'                  Stock bid: {u_bid}\n'
-          f'                  Stock ask: {u_ask}\n'
-          f'                     Sector: {sector if sector else "N/A"}\n'
-          f'                        IVR: {ivr}\n'
-          f'                     RSI 20: {rsi20}\n'
-          f'                     Vol 30: {vol30}\n'
-          f'           Open interest 30: {oi30}\n'
-          f'              Next earnings: {next_earnings}\n'
-          f'  Short term outlook (20 d): {short_outlook}\n'
-          f'    Mid term outlook (50 d): {mid_outlook}\n'
-          f'  Long term outlook (100 d): {long_outlook}\n')
+          f'                  Stock bid: {meta.u_bid}\n'
+          f'                  Stock ask: {meta.u_ask}\n'
+          f'                     Sector: {meta.sector if meta.sector else "N/A"}\n'
+          f'                        IVR: {meta.ivr}\n'
+          f'                     RSI 20: {meta.rsi20}\n'
+          f'                     Vol 30: {meta.vol30}\n'
+          f'           Open interest 30: {meta.oi30}\n'
+          f'              Next earnings: {meta.next_earnings}\n'
+          f'  Short term outlook (20 d): {meta.short_outlook}\n'
+          f'    Mid term outlook (50 d): {meta.mid_outlook}\n'
+          f'  Long term outlook (100 d): {meta.long_outlook}\n')
 
     def binary_events_present():
 
@@ -403,55 +575,70 @@ def propose_strategies(ticker, strat_cons=StrategyConstraints()):
             """
 
         # don't trade healthcare
-        if sector == "Healthcare":
+        if meta.sector == "Healthcare":
             return True
 
-        if next_earnings and next_earnings != "N/A" and strat_cons.avoid_events:
-            ne = datetime.strptime(next_earnings, '%M/%d/%y').strftime("%Y-%m-%d")
+        if meta.next_earnings and meta.next_earnings != "N/A" and strat_cons.avoid_events:
+            ne = datetime.strptime(meta.next_earnings, '%M/%d/%y').strftime("%Y-%m-%d")
             if ne >= datetime.today().strftime("%Y-%m-%d"):
                 return ne
 
+        return False
+
         # todo check for anticipated news
+
+        # todo check for dividends
 
     def is_liquid():
 
         r = True
 
-        if vol30 < strat_cons.min_vol30:
-            _warn(f'Warning! Average daily options volume < {strat_cons.min_vol30}: {vol30}\n')
+        if meta.vol30 < strat_cons.min_vol30:
+            _warn(f'[{ticker}] Warning! Average daily options volume < {strat_cons.min_vol30}: {meta.vol30}')
             if strat_cons.strict_mode:
                 r = False
 
-        if oi30 < strat_cons.min_oi30:
-            _warn(f'Warning! Average open interest < {strat_cons.min_oi30}: {oi30}\n')
-            if strat_cons.strict_mode:
-                r = False
-
-        put_spr_r, put_spr_abs = get_bid_ask_spread(next_puts, u_ask)
-        call_spr_r, call_spr_abs = get_bid_ask_spread(next_calls, u_ask)
-
-        if put_spr_r >= 10 and call_spr_r >= 10:
-            _warn(
-                f'Warning! Spread ratio is very wide: Puts = {put_spr_abs}, Calls = {call_spr_abs}\n')
+        if meta.oi30 < strat_cons.min_oi30:
+            _warn(f'[{ticker}] Warning! Average open interest < {strat_cons.min_oi30}: {meta.oi30}')
             if strat_cons.strict_mode:
                 r = False
 
         _debug(f'Liquidity:\n\n'
-               f'30 day average option volume: {vol30:7d}\n'
-               f'30 day average open interest: {oi30:7d}\n'
-               f'      Put spread ratio (rel):   {int(put_spr_r * 100):3d} %\n'
-               f'      Put spread ratio (abs):    {put_spr_abs:.2f}\n'
-               f'     Call spread ratio (rel):   {int(call_spr_r * 100):3d} %\n'
-               f'     Call spread ratio (abs):    {call_spr_abs:.2f}\n')
+               f'30 day average option volume: {meta.vol30:7d}\n'
+               f'30 day average open interest: {meta.oi30:7d}')
+
+        if not next_puts.empty():
+            put_spr_r, put_spr_abs = get_bid_ask_spread(next_puts, meta.u_ask)
+            if put_spr_r >= 0.10:
+                _warn(
+                    f'[{ticker}] Warning! Spread ratio is very wide: '
+                    f'Puts = {put_spr_abs:.2f} $ ({put_spr_r * 100:.2f} %)')
+                if strat_cons.strict_mode:
+                    r = False
+
+            _debug(f'      Put spread ratio (rel):   {int(put_spr_r * 100):3d} %\n'
+                   f'      Put spread ratio (abs):    {put_spr_abs:.2f}')
+
+        if not next_calls.empty():
+            call_spr_r, call_spr_abs = get_bid_ask_spread(next_calls, meta.u_ask)
+            if call_spr_r >= 0.10:
+                _warn(
+                    f'[{ticker}] Warning! Spread ratio is very wide: '
+                    f'Calls = {call_spr_abs:.2f} $ ({call_spr_r * 100:.2f} %)')
+                if strat_cons.strict_mode:
+                    r = False
+
+            _debug(f'     Call spread ratio (rel):   {int(call_spr_r * 100):3d} %\n'
+                   f'     Call spread ratio (abs):    {call_spr_abs:.2f}')
 
         return r
 
     def assingment_risk_tolerance_exceeded():
 
-        if u_price * 100 > ACCOUNT_BALANCE / 2:
+        if meta.u_price * 100 > ACCOUNT_BALANCE / 2:
             s = f'Warning! Underlying asset price exceeds account risk tolerance! ' \
                 f'Assignment would result in margin call!' \
-                f' {u_price * 100} > {ACCOUNT_BALANCE / 2}'
+                f' {meta.u_price * 100} > {ACCOUNT_BALANCE / 2}'
             _warn(s)
             if strat_cons.assignment_must_be_possible:
                 return
@@ -467,7 +654,7 @@ def propose_strategies(ticker, strat_cons=StrategyConstraints()):
             return
 
     if binary_event_date and type(binary_event_date) is not bool:
-        option_chain = option_chain.expiration_before(binary_event_date)
+        option_chain = meta.option_chain.expiration_before(binary_event_date)
 
     # </editor-fold>
 
@@ -475,13 +662,22 @@ def propose_strategies(ticker, strat_cons=StrategyConstraints()):
     """
         only rough check, options to trade must be checked seperately when chosen
         """
-    next_puts = option_chain.expiration_next().puts()
-    next_calls = option_chain.expiration_next().calls()
+    next_puts = meta.option_chain.expiration_next().puts()
+    next_calls = meta.option_chain.expiration_next().calls()
+
+    """
+    if next_puts.empty() or next_calls.empty():
+        _warn(f'[{ticker}] Next puts or next calls empty')  
+        # TODO then just use next expiration or sth, we filter
+        #  for volume alread when getting option chain, beeing too strict here is unnecessarily restrictive
+        return []
+    """
 
     if not is_liquid():
         _warn(f'Warning! Underlying seems illiquid!')
         if strat_cons.strict_mode:
             return
+
     # </editor-fold>
 
     # <editor-fold desc="3 Price">
@@ -493,28 +689,46 @@ def propose_strategies(ticker, strat_cons=StrategyConstraints()):
     # -----------------------------------------------------------------------------------------------------------------
 
     env = {
-        "IV": ivr,
+        "IV": meta.ivr,
         "IV outlook": 0,
 
-        "RSI20d": rsi20,
+        "RSI20d": meta.rsi20,
 
-        "short term outlook": short_outlook,
-        "mid term outlook": mid_outlook,
-        "long term outlook": long_outlook,
+        "short term outlook": meta.short_outlook,
+        "mid term outlook": meta.mid_outlook,
+        "long term outlook": meta.long_outlook,
+
+        "analyst rating": meta.analyst_rating
     }
 
-    env_con = EnvContainer(env, option_chain, u_bid, u_ask, ticker, strat_cons.min_sinle_opt_vol)
+    env_con = EnvContainer(env, meta.option_chain, meta.u_bid, meta.u_ask, ticker, strat_cons.min_sinle_opt_vol)
 
-    print(LongCall(env_con))
-    print(LongPut(env_con))
+    """lc = VerticalDebitSpread(env_con, threshold=-1)
+    print(lc)
+    lc.positions.plot_profit_dist_on_first_exp()"""
 
-    print(CoveredCall(env_con))
+    proposed_strategies = [
 
-    print(VerticalDebitSpread(env_con, opt_type="c"))
-    print(VerticalCreditSpread(env_con, opt_type="c"))
+        LongCall(env_con),
+        LongPut(env_con),
 
-    print(VerticalDebitSpread(env_con, opt_type="p"))
-    print(VerticalCreditSpread(env_con, opt_type="p"))
+        CoveredCall(env_con),
+
+        VerticalDebitSpread(env_con, opt_type="c"),
+        VerticalCreditSpread(env_con, opt_type="c"),
+
+        VerticalDebitSpread(env_con, opt_type="p"),
+        VerticalCreditSpread(env_con, opt_type="p"),
+    ]
+
+    for pos in proposed_strategies:
+        if pos.positions:
+            if auto:
+                with io.open("Strategy summary.txt", "a", encoding="utf-8") as myfile:
+                    myfile.write(str(pos))
+            else:
+                print(pos)
+                pos.positions.plot_profit_dist_on_first_exp()
 
 
 # <editor-fold desc="Requirements">
@@ -616,7 +830,7 @@ def date_str_to_dte(d: str):
     :param d: as string YYYY-MM-DD
     :return:
     """
-    return abs((datetime.now().date() - exp_to_date(d)).days)
+    return abs((datetime.now().date() - str_to_date(d)).days)
 
 
 def datetime_to_dte(d: datetime):
@@ -639,7 +853,7 @@ def dte_to_date(dte: int):
     return datetime.now() + timedelta(days=dte)
 
 
-def exp_to_date(expiration: str):
+def str_to_date(expiration: str):
     return datetime.strptime(expiration, "%Y-%m-%d").date()
 
 
@@ -652,7 +866,11 @@ def datetime_to_european_str(d: datetime):
 
 
 def date_to_opt_format(d):
-    return exp_to_date(d).strftime("%b %d")
+    return str_to_date(d).strftime("%b %d")
+
+
+def datetime_to_str(d):
+    return d.strftime("%Y-%m-%d")
 
 
 def get_delta_option_strike(chain, delta):  # chain must contain deltas (obviously onii-chan <3)
@@ -704,6 +922,52 @@ def get_extrinsic_at_dte(dte_now, extr_now, dte_then):
     return decay_func(dte_then) * extr_now / decay_func(dte_now)
 
 
+class SnappingCursor:
+    """
+    A cross hair cursor that snaps to the data point of a line, which is
+    closest to the *x* position of the cursor.
+
+    For simplicity, this assumes that *x* values of the data are sorted.
+    """
+
+    def __init__(self, ax, line):
+        self.ax = ax
+        self.horizontal_line = ax.axhline(color='k', lw=0.8, ls='--')
+        self.vertical_line = ax.axvline(color='k', lw=0.8, ls='--')
+        self.x, self.y = line.get_data()
+        self._last_index = None
+        # text location in axes coords
+        self.text = ax.text(0.72, 0.9, '', transform=ax.transAxes)
+
+    def set_cross_hair_visible(self, visible):
+        need_redraw = self.horizontal_line.get_visible() != visible
+        self.horizontal_line.set_visible(visible)
+        self.vertical_line.set_visible(visible)
+        self.text.set_visible(visible)
+        return need_redraw
+
+    def on_mouse_move(self, event):
+        if not event.inaxes:
+            self._last_index = None
+            need_redraw = self.set_cross_hair_visible(False)
+            if need_redraw:
+                self.ax.figure.canvas.draw()
+        else:
+            self.set_cross_hair_visible(True)
+            x, y = event.xdata, event.ydata
+            index = min(np.searchsorted(self.x, x), len(self.x) - 1)
+            if index == self._last_index:
+                return  # still on the same data point. Nothing to do.
+            self._last_index = index
+            x = self.x[index]
+            y = self.y[index]
+            # update the line positions
+            self.horizontal_line.set_ydata(y)
+            self.vertical_line.set_xdata(x)
+            self.text.set_text('x=%1.2f, y=%1.2f' % (x, y))
+            self.ax.figure.canvas.draw()
+
+
 # </editor-fold>
 
 # <editor-fold desc="Option Framework">
@@ -735,7 +999,7 @@ class Option:
         self.ask = ask
         self.vol = vol
 
-        self.expiration_dt = exp_to_date(self.expiration)
+        self.expiration_dt = str_to_date(self.expiration)
         self.dte = date_to_dte(self.expiration_dt)
 
         self.greeks = DDict({"delta": delta, "gamma": gamma, "theta": theta, "vega": vega, "rho": rho})
@@ -817,7 +1081,7 @@ class Stock:
         self.risk = self.get_risk()
 
     def __str__(self):
-        return f'{self.name} @ {self.bid}/{self.ask}'
+        return f'{self.name}'  # @ {self.bid}/{self.ask}'
 
     def get_risk(self):
         return self.bid
@@ -857,26 +1121,26 @@ class Position:
     def repr(self, t=0):
         indent = "\t" * t
         return f'{indent}{self.quantity:+d} {self.asset} for a cost of {self.cost:.2f} $' \
-            f'\n' \
-            f'\n' \
-            f'{indent}\tGreeks:   ' \
-            f'Δ = {self.greeks["delta"]:+.5f}   ' \
-            f'Γ = {self.greeks["gamma"]:+.5f}   ' \
-            f'ν = {self.greeks["vega"]:+.5f}    ' \
-            f'Θ = {self.greeks["theta"]:+.5f}   ' \
-            f'ρ = {self.greeks["rho"]:+.5f}     ' \
-            f'\n' \
-            f'{indent}\tMax risk: {self.risk:.2f} $' \
-            f'\n' \
-            f'{indent}\tBPR:      {self.bpr:.2f} $' \
-            f'\n' \
-            f'\n' \
-            f'{indent}       Break even on expiry: {self.break_even:.2f} $' \
-            f'\n' \
-            f'{indent}                 Max profit: {self.max_profit:.2f} $' \
-            f'\n' \
-            f'{indent}Return on margin (TP @ 50%): {self.rom:.2f}' \
-            f'\n'
+               f'\n' \
+               f'\n' \
+               f'{indent}\tGreeks:   ' \
+               f'Δ = {self.greeks["delta"]:+.5f}   ' \
+               f'Γ = {self.greeks["gamma"]:+.5f}   ' \
+               f'ν = {self.greeks["vega"]:+.5f}    ' \
+               f'Θ = {self.greeks["theta"]:+.5f}   ' \
+               f'ρ = {self.greeks["rho"]:+.5f}     ' \
+               f'\n' \
+               f'{indent}\tMax risk: {self.risk:.2f} $' \
+               f'\n' \
+               f'{indent}\tBPR:      {self.bpr:.2f} $' \
+               f'\n' \
+               f'\n' \
+               f'{indent}       Break even on expiry: {self.break_even:.2f} $' \
+               f'\n' \
+               f'{indent}                 Max profit: {self.max_profit:.2f} $' \
+               f'\n' \
+               f'{indent}Return on margin (TP @ 50%): {self.rom:.2f}' \
+               f'\n'
 
     def set_greeks(self):
 
@@ -1002,62 +1266,63 @@ class Position:
         :return:
         """
 
-        gains = [-self.cost for _ in range(max_strike*100)]
+        gains = [-self.cost for _ in range(max_strike * 100)]
 
         if type(self.asset) is Stock:
 
-            if self.quantity > 0:
+            for strike in range(max_strike * 100):
+                gains[strike] += strike / 100 * self.quantity
 
-                for strike in range(max_strike*100):
-                    gains[strike] += strike/100 * self.quantity
-
-                return gains
+            return gains
 
         elif type(self.asset) is Option:
 
             if self.asset.opt_type == "c":
 
-                if self.asset.direction == "long":
+                if self.quantity > 0:
 
-                    for strike in range(max_strike*100):
+                    for strike in range(max_strike * 100):
 
-                        if strike * 100 > self.asset.strike:
-                            gains[strike] += (self.asset.strike - strike/100) * 100*self.quantity
+                        if strike / 100 > self.asset.strike:
+                            gains[strike] += (strike / 100 - self.asset.strike) * 100 * self.quantity
 
-                    return [x/100 for x in gains]
+                    return gains
 
-                if self.asset.direction == "short":
+                if self.quantity < 0:
 
-                    for strike in range(max_strike*100):
+                    for strike in range(max_strike * 100):
 
-                        if strike*100 > self.asset.strike:
-                            gains[strike] -= (self.asset.strike - strike/100) * 100*self.quantity
+                        if strike / 100 > self.asset.strike:
+                            gains[strike] += (strike / 100 - self.asset.strike) * 100 * self.quantity
 
-                    return [x/100 for x in gains]
+                    return gains
 
             if self.asset.opt_type == "p":
 
-                if self.asset.direction == "long":
-
-                    for strike in range(max_strike*100):
-
-                        if strike * 100 < self.asset.strike:
-                            gains[strike] += (self.asset.strike - strike/100) * 100*self.quantity
-
-                    return [x / 100 for x in gains]
-
-                if self.asset.direction == "short":
+                if self.quantity > 0:
 
                     for strike in range(max_strike * 100):
-                        if strike * 100 < self.asset.strike:
-                            gains[strike] -= (self.asset.strike - strike/100) * 100*self.quantity
 
-                    return [x / 100 for x in gains]
+                        if strike / 100 < self.asset.strike:
+                            gains[strike] -= (strike / 100 - self.asset.strike) * 100 * self.quantity
+
+                    return gains
+
+                if self.quantity < 0:
+
+                    for strike in range(max_strike * 100):
+                        if strike / 100 < self.asset.strike:
+                            gains[strike] -= (strike / 100 - self.asset.strike) * 100 * self.quantity
+
+                    return gains
 
     def get_profit_dist_at_date(self, max_strike: int, d: str):
         exp_profit_dist = self.get_profit_dist_at_exp(max_strike=max_strike)
 
         if type(self.asset) is Stock:
+            return exp_profit_dist
+
+        if date_to_dte(str_to_date(d)) >= self.asset.dte:
             return exp_profit_dist
 
         if type(self.asset) is Option:
@@ -1073,42 +1338,89 @@ class Position:
             use dte_then and forecasted decayed option price to iterate over strikes and calc
             option price at different prices of u in the future using EuroOption
             """
-            dte_now = date_str_to_dte(self.asset.expiration)
-            dte_then = (exp_to_date(self.asset.expiration) - exp_to_date(d)).days
+
+            binomial_iterations = 10
+
+            # dte_now = date_str_to_dte(self.asset.expiration)
+            dte_then = (str_to_date(self.asset.expiration) - str_to_date(d)).days
 
             # forecasted extrinsic value of long option when short option expires
             if self.asset.opt_type == "p":
                 current_intr = self.asset.strike - self.underlying_price
+
             if self.asset.opt_type == "c":
                 current_intr = self.underlying_price - self.asset.strike
 
             current_intr = max(0, current_intr)
 
-            current_extr_per_opt = self.asset.ask - current_intr
+            # current_extr_per_opt = self.asset.ask - current_intr
             # we can only forecast this for the current option at the current underlying price
             # forecasted_extr_per_opt = get_extrinsic_at_dte(dte_now, current_extr_per_opt, dte_then)
 
-            risk_free_rate = get_risk_free_rate(dte_then/365.0)
+            risk_free_rate = get_risk_free_rate(dte_then / 365.0)
 
             is_call = self.asset.opt_type == "c"
 
             for strike in range(max_strike * 100):
 
                 future_price = \
-                    EuroOption(strike/100.0, self.asset.strike, risk_free_rate, dte_then/365.0,
-                               40,
+                    EuroOption(strike / 100.0, self.asset.strike, risk_free_rate, dte_then / 365.0,
+                               binomial_iterations,
                                {'is_call': is_call,
                                 'eu_option': False,
                                 'sigma': self.asset.iv}).price()
 
-                if self.asset.direction == "long":
+                if self.quantity > 0:
                     profit_at_strike = self.quantity * future_price * 100 - self.cost
-                if self.asset.direction == "short":
+                if self.quantity < 0:
                     profit_at_strike = -self.cost + self.quantity * future_price * 100
 
                 exp_profit_dist[strike] = profit_at_strike
 
             return exp_profit_dist
+
+    def plot_profit_dist_at_exp(self, max_strike: int):
+        x = [i / 100 for i in range(max_strike * 100)]
+
+        fig, ax1 = plt.subplots()
+
+        ax1.plot(x, np.zeros(len(x)), 'k--')
+        line, = ax1.plot(x, self.get_profit_dist_at_exp(max_strike), color='#0a7800', linestyle='-')
+
+        ax1.set_title(self.__repr__().strip())
+
+        snap_cursor = SnappingCursor(ax1, line)
+        fig.canvas.mpl_connect('motion_notify_event', snap_cursor.on_mouse_move)
+
+        # ax1.xaxis.set_major_locator(plticker.MultipleLocator(base=1.0))
+        # ax1.yaxis.set_major_locator(plticker.MultipleLocator(base=50.0))
+
+        ax1.plot(self.underlying_price, 0, 'r^')
+
+        # plt.grid(True)
+        plt.tight_layout()
+
+        plt.show()
+
+    def plot_profit_dist_at_date(self, max_strike: int, d: str):
+        x = [i / 100 for i in range(max_strike * 100)]
+        fig, ax1 = plt.subplots()
+
+        ax1.plot(x, np.zeros(len(x)), 'k--', x, self.get_profit_dist_at_exp(max_strike), 'b-')
+        line, = ax1.plot(x, self.get_profit_dist_at_date(max_strike, d), color='#0a7800', linestyle='-')
+
+        snap_cursor = SnappingCursor(ax1, line)
+        fig.canvas.mpl_connect('motion_notify_event', snap_cursor.on_mouse_move)
+
+        # ax1.xaxis.set_major_locator(plticker.MultipleLocator(base=1.0))
+        # ax1.yaxis.set_major_locator(plticker.MultipleLocator(base=50.0))
+
+        ax1.plot(self.underlying_price, 0, 'r^')
+
+        # plt.grid(True)
+        plt.tight_layout()
+
+        plt.show()
 
     def get_rom(self):
         if self.bpr == 0:
@@ -1151,45 +1463,48 @@ class OptionChain:
     cols = ["name", "strike", "bid", "ask", "mid", "last", "volume", "OI", "IV",
             "delta", "gamma", "vega", "theta", "rho", "contract", "expiration", "direction"]
 
-    def __init__(self, chain=None, chain_dict=None, ):
+    def __init__(self, chain=None, chain_dict=None, save=True):
 
-        if chain is not None:
-            chain.reset_index(inplace=True, drop=True)
+        if chain is not None:  # create from another OptionChain by filtering
+            # chain.reset_index(inplace=True, drop=True)
 
             if type(chain) is pd.Series:
                 self.options = chain.to_frame().T
+                self.options = self.non_zero_ask(internal=True)
                 self.options.columns = OptionChain.cols
+
             if type(chain) is pd.DataFrame:
                 self.options = chain
+                self.options = self.non_zero_ask(internal=True)
 
-            if not chain.empty:
+            if not self.options.empty:
                 self.expirations = sorted(self.options["expiration"].unique().tolist())
-                self.ticker = self.options.at[0, "name"][:6]
+                self.ticker = self.options.loc[:, "name"][0][:6]
                 self.ticker = ''.join([i for i in self.ticker if not i.isdigit()])
             else:
                 self.expirations = []
                 self.ticker = None
 
-            _debug(("-" * 73) + "Chain after filtering" + ("-" * 73))
-            _debug("Expirations:", self.expirations, "\nLength:", len(self.options))
-            _debug(self.options.head(5))
+            #_debug(("-" * 73) + "Chain after filtering" + ("-" * 73))
+            #_debug("Expirations:", self.expirations, "\nLength:", len(self.options))
+            #_debug(self.options.head(5))
 
-        else:
+        elif chain_dict is not None:  # create from yahoo data frame
             self.expirations = list(chain_dict.keys())
 
-            self.ticker = chain_dict[self.expirations[0]].puts.loc[0, "name"][:6]
+            self.ticker = chain_dict[self.expirations[0]].puts.loc[:, "name"][0][:6]
             self.ticker = ''.join([i for i in self.ticker if not i.isdigit()])
 
             contract_list = list()
 
             for expiration in self.expirations:
-                chain_dict[expiration].puts.loc[:, "contract"] = "p"
-                chain_dict[expiration].puts.loc[:, "expiration"] = expiration
-                chain_dict[expiration].puts.loc[:, "direction"] = "long"
+                chain_dict[expiration].puts["contract"] = "p"
+                chain_dict[expiration].puts["expiration"] = expiration
+                chain_dict[expiration].puts["direction"] = "long"
 
-                chain_dict[expiration].calls.loc[:, "contract"] = "c"
-                chain_dict[expiration].calls.loc[:, "expiration"] = expiration
-                chain_dict[expiration].calls.loc[:, "direction"] = "long"
+                chain_dict[expiration].calls["contract"] = "c"
+                chain_dict[expiration].calls["expiration"] = expiration
+                chain_dict[expiration].calls["direction"] = "long"
 
                 contract_list.extend((chain_dict[expiration].puts, chain_dict[expiration].calls))
 
@@ -1205,6 +1520,7 @@ class OptionChain:
                 short_chain.loc[index, "rho"] *= -1
 
             self.options = pd.concat((long_chain, short_chain), ignore_index=True)
+            self.options = self.non_zero_ask(internal=True)
 
             OptionChain.cols = list(self.options.columns.values)
 
@@ -1213,8 +1529,13 @@ class OptionChain:
 
             # self.options.fillna(0, inplace=True)
 
-            if online:
+            if online and save:
                 self.save_as_file()
+        else:
+            self.options = pd.DataFrame()
+
+    def empty(self):
+        return len(self.options) == 0
 
     def __repr__(self):
         return self.options.to_string()
@@ -1384,8 +1705,6 @@ class OptionChain:
         # puts or calls?
         contracts = self.options["contract"].unique().tolist()
 
-        prefiltered = self.options
-
         if len(contracts) > 1:
             # _warn("Filter for contract type before filtering on OTM strike!")
 
@@ -1393,9 +1712,15 @@ class OptionChain:
             prefiltered = self.puts() if contract_default == "p" else self.calls()
             contract_type = contract_default
         else:
-            contract_type = contracts[0]
+            contract_type = contract_default  # contracts[0]
+            prefiltered = self
 
         _debug(f'Filter for {n} {moneyness} strike on {contract_type}')
+
+        if contract_type not in contracts:
+            _debug(f'OptionChain does not contain any {"puts" if contract_type == "p" else "calls"}, returning empty '
+                   f'OptionChain')
+            return OptionChain()
 
         # where is ATM? -> delta closest to 0.5
         # atm_index = np.asarray([abs(abs(g)-0.5) for g in prefiltered.options["delta"]]).argmax()
@@ -1405,19 +1730,27 @@ class OptionChain:
         _debug(f'Detected ATM strike at {prefiltered.options.loc[atm_index, "strike"]}')
 
         f = None
+        use_atm = 0
+        # TODO set bounds
+        strikes = prefiltered.options["strike"].values.tolist()
+        min_strike, max_strike = min_closest_index(strikes, min(strikes)), min_closest_index(strikes, max(strikes))
+
+        def cap(x):
+            return min(max(min_strike, x), max_strike)
+
         if contract_type == "c":  # 5
 
             if moneyness == "ITM":
-                f = prefiltered.options.iloc[max(atm_index - n - 1, 0), :]
+                f = prefiltered.options.iloc[cap(max(atm_index - n - use_atm, 0)), :]
             if moneyness == "OTM":
-                f = prefiltered.options.iloc[min(atm_index + n + 1, len(prefiltered.options)), :]
+                f = prefiltered.options.iloc[cap(min(atm_index + n + use_atm, len(prefiltered.options))), :]
 
         if contract_type == "p":  # 3
 
             if moneyness == "ITM":
-                f = prefiltered.options.iloc[min(atm_index + n + 1, len(prefiltered.options)), :]
+                f = prefiltered.options.iloc[cap(min(atm_index + n + use_atm, len(prefiltered.options))), :]
             if moneyness == "OTM":
-                f = prefiltered.options.iloc[max(atm_index - n - 1, 0), :]
+                f = prefiltered.options.iloc[cap(max(atm_index - n - use_atm, 0)), :]
 
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1481,6 +1814,22 @@ class OptionChain:
             f = f.to_frame().T
         return OptionChain(f)
 
+    def open_interest(self, min_oi):
+        _debug(f"Filter for single option open interest > {min_oi}")
+        f = self.options.loc[self.options['OI'] > min_oi]
+        if type(f) is pd.Series:
+            f = f.to_frame().T
+        return OptionChain(f)
+
+    def non_zero_ask(self, internal=False):
+        f = self.options.loc[self.options['ask'] > 0.0]
+        if type(f) is pd.Series:
+            f = f.to_frame().T
+        f.reset_index(inplace=True, drop=True)
+        if not internal:
+            return OptionChain(f)
+        return f
+
     # <editor-fold desc="File">
     def save_as_file(self):
 
@@ -1490,7 +1839,7 @@ class OptionChain:
             print(f'Creating file:\n'
                   f'\t{filename}.pickle ...')
 
-            with open(filename + ".pickle", "wb") as file:
+            with open("chains/" + filename + ".pickle", "wb") as file:
                 pickle.dump(self, file)
 
             print("File created successfully!")
@@ -1501,7 +1850,7 @@ class OptionChain:
     @staticmethod
     def from_file(filename):
         try:
-            f = pickle.load(open(filename + ".pickle", "rb"))
+            f = pickle.load(open("chains/" + filename + ".pickle", "rb"))
             return f
         except Exception as e:
             print("While reading the file", filename, "an exception occurred:", e)
@@ -1535,7 +1884,7 @@ class CombinedPosition:
 
         self.u_bid = u_bid
         self.u_ask = u_ask
-        self.underlying = ticker
+        self.underlying = ticker.split()[0]
 
         self.cost = -1
         self.risk = -1
@@ -1549,12 +1898,13 @@ class CombinedPosition:
             self.update_status()
 
         if not any(type(pos.asset) is Stock for pos in self.pos_dict.values()):
-            self.stock = Stock(ticker, self.u_ask, self.u_ask)
+            self.stock = Stock(ticker, self.u_bid, self.u_ask)
             self.add_asset(self.stock, 0, no_update=True)
         else:
             self.stock = self.pos_dict[self.underlying]
 
         self.greeks = self.get_greeks()
+        self.theta_to_delta = float(self.greeks["theta"] / float(max(abs(self.greeks["delta"]), 0.00001)))
 
     def __repr__(self):
         return self.repr()
@@ -1568,39 +1918,39 @@ class CombinedPosition:
                     s += f'{indent}{val.short(t=t + 1)}\n'
                 else:
                     s += f'\n' \
-                        f'{indent}Position {key}:' \
-                        f'\n\n' \
-                        f'{indent}{val.short(t=t + 1)}' \
-                        f'\n' \
-                        f'{indent}{"." * 300}' \
-                        f'\n'
+                         f'{indent}Position {key}:' \
+                         f'\n\n' \
+                         f'{indent}{val.short(t=t + 1)}' \
+                         f'\n' \
+                         f'{indent}{"." * 300}' \
+                         f'\n'
 
         return f'\n\n' \
-            f'{s}' \
-            f'\n' \
-            f'{indent}   Cumulative strategy cost: {self.cost:.2f} $' \
-            f'\n' \
-            f'\n' \
-            f'{indent}          Cumulative Greeks: ' \
-            f'Δ = {self.greeks["delta"]:+.5f}   ' \
-            f'Γ = {self.greeks["gamma"]:+.5f}   ' \
-            f'ν = {self.greeks["vega"]:+.5f}    ' \
-            f'Θ = {self.greeks["theta"]:+.5f}   ' \
-            f'ρ = {self.greeks["rho"]:+.5f}     ' \
-            f'\n' \
-            f'{indent}                Theta/Delta: {self.greeks["theta"]/max(abs(self.greeks["delta"]),0.00001):+.5f}' \
-            f'\n' \
-            f'{indent}                   Max risk: {self.risk:.2f} $' \
-            f'\n' \
-            f'{indent}                        BPR: {self.bpr:.2f} $' \
-            f'\n' \
-            f'\n' \
-            f'{indent}       Break even on expiry: {self.break_even:.2f} $' \
-            f'\n' \
-            f'{indent}                 Max profit: {self.max_profit:.2f} $' \
-            f'\n' \
-            f'{indent}Return on margin (TP @ 50%): {self.rom:.2f}' \
-            f'\n\n'
+               f'{s}' \
+               f'\n' \
+               f'{indent}   Cumulative strategy cost: {self.cost:.2f} $' \
+               f'\n' \
+               f'\n' \
+               f'{indent}          Cumulative Greeks: ' \
+               f'Δ = {self.greeks["delta"]:+.5f}   ' \
+               f'Γ = {self.greeks["gamma"]:+.5f}   ' \
+               f'ν = {self.greeks["vega"]:+.5f}    ' \
+               f'Θ = {self.greeks["theta"]:+.5f}   ' \
+               f'ρ = {self.greeks["rho"]:+.5f}     ' \
+               f'\n' \
+               f'{indent}                Theta/Delta: {self.theta_to_delta * 100:+.5f} %' \
+               f'\n' \
+               f'{indent}                   Max risk: {self.risk:.2f} $' \
+               f'\n' \
+               f'{indent}                        BPR: {self.bpr:.2f} $' \
+               f'\n' \
+               f'\n' \
+               f'{indent}       Break even on expiry: {self.break_even:.2f} $' \
+               f'\n' \
+               f'{indent}                 Max profit: {self.max_profit:+.2f} $' \
+               f'\n' \
+               f'{indent}Return on margin (TP @ 50%): {self.rom * 100:.2f} %' \
+               f'\n\n'
 
     def detail(self, t=0):
         """
@@ -1611,45 +1961,46 @@ class CombinedPosition:
         for key, val in self.pos_dict.items():
             if val.quantity != 0:
                 s += f'\n' \
-                    f'{indent}Position {key}:' \
-                    f'\n\n' \
-                    f'{indent}{val.repr(t=t + 1)}' \
-                    f'\n' \
-                    f'{indent}{"." * 300}' \
-                    f'\n'
+                     f'{indent}Position {key}:' \
+                     f'\n\n' \
+                     f'{indent}{val.repr(t=t + 1)}' \
+                     f'\n' \
+                     f'{indent}{"." * 300}' \
+                     f'\n'
         return f'\n' \
-            f'{indent}{s}' \
-            f'\n' \
-            f'{indent}   Cumulative strategy cost: {self.cost:.2f} $' \
-            f'\n' \
-            f'\n' \
-            f'{indent}          Cumulative Greeks: ' \
-            f'Δ = {self.greeks["delta"]:+.5f}   ' \
-            f'Γ = {self.greeks["gamma"]:+.5f}   ' \
-            f'ν = {self.greeks["vega"]:+.5f}    ' \
-            f'Θ = {self.greeks["theta"]:+.5f}   ' \
-            f'ρ = {self.greeks["rho"]:+.5f}     ' \
-            f'\n' \
-            f'{indent}                Theta/Delta: {self.greeks["theta"] / self.greeks["delta"]:+.5f}' \
-            f'\n' \
-            f'{indent}                   Max risk: {self.risk:.2f} $' \
-            f'\n' \
-            f'{indent}                        BPR: {self.bpr:.2f} $' \
-            f'\n' \
-            f'\n' \
-            f'{indent}       Break even on expiry: {self.break_even:.2f} $' \
-            f'\n' \
-            f'{indent}                 Max profit: {self.max_profit:.2f} $' \
-            f'\n' \
-            f'{indent}Return on margin (TP @ 50%): {self.rom:.2f}' \
-            f'\n' \
-            f'{indent}{"-" * 300}' \
-            f'\n' \
-            f'\n'
+               f'{indent}{s}' \
+               f'\n' \
+               f'{indent}   Cumulative strategy cost: {self.cost:.2f} $' \
+               f'\n' \
+               f'\n' \
+               f'{indent}          Cumulative Greeks: ' \
+               f'Δ = {self.greeks["delta"]:+.5f}   ' \
+               f'Γ = {self.greeks["gamma"]:+.5f}   ' \
+               f'ν = {self.greeks["vega"]:+.5f}    ' \
+               f'Θ = {self.greeks["theta"]:+.5f}   ' \
+               f'ρ = {self.greeks["rho"]:+.5f}     ' \
+               f'\n' \
+               f'{indent}                Theta/Delta: {self.greeks["theta"] / self.greeks["delta"]:+.5f}' \
+               f'\n' \
+               f'{indent}                   Max risk: {self.risk:.2f} $' \
+               f'\n' \
+               f'{indent}                        BPR: {self.bpr:.2f} $' \
+               f'\n' \
+               f'\n' \
+               f'{indent}       Break even on expiry: {self.break_even:.2f} $' \
+               f'\n' \
+               f'{indent}                 Max profit: {self.max_profit:.2f} $' \
+               f'\n' \
+               f'{indent}Return on margin (TP @ 50%): {self.rom:.2f}' \
+               f'\n' \
+               f'{indent}{"-" * 300}' \
+               f'\n' \
+               f'\n'
 
     def update_status(self):
         self.cost = self.get_cost()
         self.greeks = self.get_greeks()
+        self.theta_to_delta = float(self.greeks["theta"] / float(max(abs(self.greeks["delta"]), 0.00001)))
         self.risk = self.get_risk()
         self.bpr = self.get_bpr()
         self.break_even = self.get_break_even()
@@ -1906,9 +2257,9 @@ class CombinedPosition:
         :return:
         """
         if asset.name in list(self.pos_dict.keys()):
-            self.pos_dict[asset].add_x(quantity)
+            self.pos_dict[asset.name].add_x(quantity)
         else:
-            self.pos_dict[asset] = Position(asset, quantity, self.u_ask)
+            self.pos_dict[asset.name] = Position(asset, quantity, self.u_ask)
 
         if not no_update:
             self.update_status()
@@ -1955,13 +2306,21 @@ class CombinedPosition:
         self.update_status()
 
     def get_greeks(self):
-        greeks = DDict({"delta": 0, "gamma": 0, "theta": 0, "vega": 0, "rho": 0})
+        greeks = DDict({
+            "delta": 0.0,
+            "gamma": 0.0,
+            "theta": 0.0,
+            "vega": 0.0,
+            "rho": 0.0
+        })
+
         for name, position in self.pos_dict.items():
             greeks.delta += position.greeks.delta
             greeks.gamma += position.greeks.gamma
             greeks.vega += position.greeks.vega
             greeks.theta += position.greeks.theta
             greeks.rho += position.greeks.rho
+
         return greeks
 
     """@staticmethod
@@ -1985,7 +2344,8 @@ class CombinedPosition:
             return -1  # todo
 
     def get_break_even(self):
-        return -1
+        dist = self.get_profit_dist_on_first_exp()
+        return min_closest_index(dist, 0.0) / 100
 
     def get_profit_dist_at_exp(self):
 
@@ -1999,17 +2359,20 @@ class CombinedPosition:
         you can only do the following for options that have the same expiration
         """
 
+        # if there is max 1 unique expiration in the combined position
         if len(set([p.asset.expiration for p in list(self.pos_dict.values()) if type(p) is Option])) <= 1:
 
             highest_strike = max([p.asset.strike for p in list(self.pos_dict.values()) if type(p.asset) is Option])
-            profit_dist = np.zeros(range(int(highest_strike*100)))
+            profit_dist = [0 for _ in range(int(highest_strike * 100))]
 
-            pos_profits = [np.asarray(pos.get_profit_dist(highest_strike*2)) for pos in list(self.pos_dict.values())]
+            pos_profits = [np.asarray(pos.get_profit_dist(highest_strike * 2)) for pos in list(self.pos_dict.values())]
 
             for profits in pos_profits:
                 profit_dist += profits
 
             return list(profit_dist)
+
+        _warn("Profit dist at exp returned none as there are multiple different expiries")
 
     def get_max_profit(self):
         """
@@ -2018,10 +2381,74 @@ class CombinedPosition:
         Does a long pos expire first? what about the short that it was covering if any? risk rise to unlimited?
         :return:
         """
-        return -1
+        return self.get_max_profit_on_first_exp()  # todo
 
     def get_max_profit_on_first_exp(self):
-        return -1
+        return max(self.get_profit_dist_on_first_exp())
+
+    def get_profit_dist_on_first_exp(self):
+        options = [p for p in list(self.pos_dict.values()) if type(p.asset) is Option]
+        first_exp = min([datetime_to_str(pos.asset.expiration_dt) for pos in options])
+        # first_exp = datetime_to_str(str_to_date(first_exp) - timedelta(days=1))
+        return self.get_profit_dist_at_date(first_exp)
+
+    def get_profit_dist_at_date(self, d):
+
+        options = [p for p in list(self.pos_dict.values()) if type(p.asset) is Option]
+
+        # TODO this currently prevents you from getting P/L after first expiration
+        if d > min([datetime_to_str(pos.asset.expiration_dt) for pos in options]):
+            _warn("Expiration date exceeds first expiration date of options in CombinedPosition, falling back to first"
+                  "expiration date P/L data")
+            return self.get_profit_dist_at_exp()
+
+        max_strike = int(max([pos.asset.strike for pos in options])) + 1
+
+        option_profit_dists = [pos.get_profit_dist_at_date(max_strike * 2, d) for pos in options]
+        stock_profit_dist = self.pos_dict[self.underlying].get_profit_dist_at_date(max_strike * 2, d)
+        option_profit_dists.append(stock_profit_dist)
+
+        combined_profits = [0 for _ in range(max_strike * 2 * 100)]
+
+        for strike in range(max_strike * 2 * 100):
+            combined_profits[strike] = sum([profit_dist[strike] for profit_dist in option_profit_dists])
+
+        return combined_profits
+
+    def plot_profit_dist_on_first_exp(self):
+        options = [p for p in list(self.pos_dict.values()) if type(p.asset) is Option]
+        first_exp = min([datetime_to_str(pos.asset.expiration_dt) for pos in options])
+        return self.plot_profit_dist_at_date(first_exp)
+
+    def plot_profit_dist_at_date(self, d):
+
+        max_profits = self.get_profit_dist_on_first_exp()
+
+        x = [i / 100 for i in range(len(max_profits))]
+        fig, ax1 = plt.subplots()
+
+        ax1.plot(x, np.zeros(len(x)), 'k--', x, self.get_profit_dist_on_first_exp(), 'b-')
+        line, = ax1.plot(x, self.get_profit_dist_at_date(d), color='#0a7800', linestyle='-')
+
+        snap_cursor = SnappingCursor(ax1, line)
+        fig.canvas.mpl_connect('motion_notify_event', snap_cursor.on_mouse_move)
+
+        s = self.underlying.upper() + "\n"
+        for pos in list(self.pos_dict.values()):
+            if pos.quantity != 0:
+                s += pos.__repr__() + "\n"
+        ax1.set_title(s.strip())
+
+        ax1.plot(self.u_ask, 0, 'r^')
+        ax1.plot(self.u_bid, 0, 'rv')
+
+        # ax1.xaxis.set_major_locator(plticker.MultipleLocator(base=1.0))
+        # ax1.yaxis.set_major_locator(plticker.MultipleLocator(base=50.0))
+
+        # plt.grid(True)
+        plt.tight_layout()
+
+        plt.show()
 
     def get_rom(self):
         """
@@ -2029,7 +2456,7 @@ class CombinedPosition:
         return on margin based on: max profit / self.bpr
         :return:
         """
-        return self.max_profit / self.bpr
+        return self.max_profit / self.bpr * 0.5
 
     def _get_50(self):
         # todo
@@ -2039,17 +2466,76 @@ class CombinedPosition:
         """
         return 0
 
-    def shift(self, n):
+
+class VerticalSpread(CombinedPosition):
+
+    def __init__(self, quantity: int, long_leg: Option, short_leg: Option,
+                 u_bid: float, u_ask: float, ticker: str):
+        self.long_pos = Position(long_leg, quantity, u_ask)
+        self.short_pos = Position(short_leg, quantity, u_ask)
+        pos_dict = {
+            long_leg.name: self.long_pos,
+            short_leg.name: self.short_pos
+        }
+        super().__init__(pos_dict, u_bid, u_ask, ticker)
+
+    def get_risk(self):  # todo test
+        return self.long_pos.cost + self.short_pos.cost
+
+    def get_max_profit_on_first_exp(self):  # todo test
+        return -self.short_pos.cost
+
+    @staticmethod
+    def get_spread(chain, u_bid, u_ask, conditions: dict):
         """
-        Shifts the strikes of all options in the position n strikes up (negative n shifts down)
-        :param n:
+        give me a vertical spread of some kind so that ...
+
+        :param chain:
+        :param u_bid:
+        :param u_ask:
+        :param conditions:
         :return:
         """
-        for position in self.pos_dict.values():
-            if type(position.asset) is Option:
-                position.asset.shift(n)
 
-        self.update_status()
+        """
+        example conditions:
+        
+        conditions = {
+        
+            "DTE": 45,
+            
+            "max risk": 50,
+            "min gain": 20,
+            "min p50": 50
+        }
+        """
+
+        # can scan option chain and filter out unfitting options (depend on single option values)
+        scannable_keys = ["DTE", "min vol", "min oi"]  # for both legs uniform?
+
+        # can only be checked after spread is created (depend on more than one options values)
+        checkable_keys = ["max risk", "min gain", "min p50", "min pop", "min rom", "min theta/delta"]
+
+        scannable_key2func = {
+            "DTE": OptionChain.expiration_close_to_dte,
+            "delta": OptionChain.delta_close_to,
+            "gamma": OptionChain.gamma_close_to,
+            "theta": OptionChain.theta_close_to,
+            "vega": OptionChain.vega_close_to,
+            "min vol": OptionChain.volume,
+            "min oi": OptionChain.open_interest,
+        }
+
+        scannable_dict = {key: value for key, value in conditions.items() if key in scannable_keys}
+        checkable_dict = {key: value for key, value in conditions.items() if key in checkable_keys}
+
+        filtered_chain = deepcopy(chain)
+
+        for condition, value in scannable_dict.items():  # todo works?
+            filtered_chain = filtered_chain.condition(value)
+
+        # build all possible spread positions from filtered chain
+
 
 # </editor-fold>
 
@@ -2095,7 +2581,7 @@ class OptionStrategy:
 
         self.name = name
         self.position_builder = position_builder  # name of the method that returns the position
-        self.positions = None
+        self.positions: CombinedPosition = None
         self.conditions = conditions
         self.env_container = env
         # self.env_container.chain = deepcopy(self.env_container.chain)
@@ -2131,32 +2617,32 @@ class OptionStrategy:
             h += f'{indent}           {hint}\n'
 
         return f'\n' \
-            f'{indent}{"-" * 300}' \
-            f'\n' \
-            f'{indent}{self.name} for {self.positions.underlying} ({(self.recommendation * 100):+3.2f}%):' \
-            f'\n' \
-            f'{indent}{"-" * 300}' \
-            f'{indent}{self.positions.repr(t=t + 1)}' \
-            f'{indent}Greek exposure:' \
-            f'\n' \
-            f'{indent}\tΔ = {self.greek_exposure["delta"]}' \
-            f'\n' \
-            f'{indent}\tΓ = {self.greek_exposure["gamma"]}' \
-            f'\n' \
-            f'{indent}\tν = {self.greek_exposure["vega"]}' \
-            f'\n' \
-            f'{indent}\tΘ = {self.greek_exposure["theta"]}' \
-            f'\n' \
-            f'{indent}\tρ = {self.greek_exposure["rho"]}' \
-            f'\n' \
-            f'\n' \
-            f'{indent} Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} DTE)' \
-            f'\n' \
-            f'{indent}      P50: {self.positions.p50 * 100} %' \
-            f'\n' \
-            f'{indent}Stop loss: {self.sl_percentage / 100 * self.positions.risk:.2f} $' \
-            f'\n' \
-            f'{indent}    Hints: {h}'
+               f'{indent}{"-" * 300}' \
+               f'\n' \
+               f'{indent}{self.name} for {self.positions.underlying} ({(self.recommendation * 100):+3.2f}%):' \
+               f'\n' \
+               f'{indent}{"-" * 300}' \
+               f'{indent}{self.positions.repr(t=t + 1)}' \
+               f'{indent}Greek exposure:' \
+               f'\n' \
+               f'{indent}\tΔ = {self.greek_exposure["delta"]}' \
+               f'\n' \
+               f'{indent}\tΓ = {self.greek_exposure["gamma"]}' \
+               f'\n' \
+               f'{indent}\tν = {self.greek_exposure["vega"]}' \
+               f'\n' \
+               f'{indent}\tΘ = {self.greek_exposure["theta"]}' \
+               f'\n' \
+               f'{indent}\tρ = {self.greek_exposure["rho"]}' \
+               f'\n' \
+               f'\n' \
+               f'{indent} Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} DTE)' \
+               f'\n' \
+               f'{indent}      P50: {self.positions.p50 * 100} %' \
+               f'\n' \
+               f'{indent}Stop loss: {self.sl_percentage / 100 * self.positions.risk:.2f} $' \
+               f'\n' \
+               f'{indent}    Hints: {h}'
 
     def repr(self, t=0):
 
@@ -2170,43 +2656,42 @@ class OptionStrategy:
             h += f'{indent}           {hint}\n'
 
         return f'\n' \
-            f'{indent}{"-" * 300}' \
-            f'\n' \
-            f'{indent}{self.name} for {self.positions.underlying}:' \
-            f'\n' \
-            f'{indent}{"-" * 300}' \
-            f'{indent}{self.positions.repr(t=t + 1)}' \
-            f'{indent}{"-" * 300}' \
-            f'\n' \
-            f'{indent}Greek exposure:' \
-            f'\n' \
-            f'{indent}\tΔ = {self.greek_exposure["delta"]}' \
-            f'\n' \
-            f'{indent}\tΓ = {self.greek_exposure["gamma"]}' \
-            f'\n' \
-            f'{indent}\tν = {self.greek_exposure["vega"]}' \
-            f'\n' \
-            f'{indent}\tΘ = {self.greek_exposure["theta"]}' \
-            f'\n' \
-            f'{indent}\tρ = {self.greek_exposure["rho"]}' \
-            f'\n' \
-            f'\n' \
-            f'{indent} Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} DTE)' \
-            f'\n' \
-            f'{indent}      P50: {self.positions.p50 * 100} %' \
-            f'\n' \
-            f'{indent}Stop loss: {self.sl_percentage / 100 * self.positions.risk:.2f} $' \
-            f'\n' \
-            f'{indent}    Hints: {h}' \
-            f'\n'
+               f'{indent}{"-" * 300}' \
+               f'\n' \
+               f'{indent}{self.name} for {self.positions.underlying}:' \
+               f'\n' \
+               f'{indent}{"-" * 300}' \
+               f'{indent}{self.positions.repr(t=t + 1)}' \
+               f'{indent}{"-" * 300}' \
+               f'\n' \
+               f'{indent}Greek exposure:' \
+               f'\n' \
+               f'{indent}\tΔ = {self.greek_exposure["delta"]}' \
+               f'\n' \
+               f'{indent}\tΓ = {self.greek_exposure["gamma"]}' \
+               f'\n' \
+               f'{indent}\tν = {self.greek_exposure["vega"]}' \
+               f'\n' \
+               f'{indent}\tΘ = {self.greek_exposure["theta"]}' \
+               f'\n' \
+               f'{indent}\tρ = {self.greek_exposure["rho"]}' \
+               f'\n' \
+               f'\n' \
+               f'{indent} Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} DTE)' \
+               f'\n' \
+               f'{indent}      P50: {self.positions.p50 * 100} %' \
+               f'\n' \
+               f'{indent}Stop loss: {self.sl_percentage / 100 * self.positions.risk:.2f} $' \
+               f'\n' \
+               f'{indent}    Hints: {h}' \
+               f'\n'
 
     def _test_environment(self, env: dict):
         """
-
         :return: score from -1 to 1;
         1 if all conditions from self.conditions are fully fullfilled
         0 if application of strat is neutral
-        -1 if application is unadived
+        -1 if application is unadvised
         """
         try:
             score = 0
@@ -2215,8 +2700,8 @@ class OptionStrategy:
                 for entry in val:
                     tmp = max(entry(env[key]), tmp)
                     _debug(f'Testing {self.name} for: {key} = {entry.__name__}\n'
-                           f'\t{key}:       {env[key]:+.5f}\n'
-                           f'\t{key} Score: {tmp:+.5f}')
+                           f'\t{key}:       {env[key]:+.2f}\n'
+                           f'\t{key} Score: {tmp:+.2f}')
                 score += tmp
             return score / len(self.conditions.keys())
         except KeyError as e:
@@ -2249,6 +2734,9 @@ class OptionStrategy:
 
             self.positions = self.position_builder()
 
+            if self.positions is None:
+                return False
+
             if not self._check_liquidity():
                 self.positions = None
                 return False
@@ -2257,8 +2745,8 @@ class OptionStrategy:
             self._set_close_date()
             self._set_p50()
         else:
-            print(f'\nThreshold of {self.threshold} for {self.name} was not reached: '
-                  f'{self.recommendation:+.5f} < {self.threshold}\n')
+            _debug(f'\nThreshold of {self.threshold} for {self.name} was not reached: '
+                   f'{self.recommendation:+.5f} < {self.threshold}\n')
 
     def _set_close_date(self):
         if self.positions:
@@ -2289,8 +2777,9 @@ class OptionStrategy:
 
         for name, pos in self.positions.pos_dict.items():
             if type(pos.asset) is Option and pos.asset.vol < self.env_container.min_per_option_vol:
-                print(f'\t{self.name} on {self.env_container.ticker} failed to meet individual volume requirements: '
-                      f'{pos.asset.vol} < {self.env_container.min_per_option_vol}\n')
+                print(
+                    f'\n\n----{self.name} on {self.env_container.ticker} failed to meet individual volume requirements: '
+                    f'{pos.asset.vol} < {self.env_container.min_per_option_vol}\n')
                 return False
         return True
 
@@ -2345,6 +2834,8 @@ class LongCall(OptionStrategy):
         self.conditions = {
             "short term outlook": [bullish],
             "mid term outlook": [bullish] if not short_term else [],
+
+            "analyst rating": [bullish]
         }
 
         self.hints = ["Always set a take profit!", "It's just money :)"]
@@ -2399,6 +2890,8 @@ class LongPut(OptionStrategy):
         self.conditions = {
             "short term outlook": [bearish],
             "mid term outlook": [bearish] if not short_term else [],
+
+            "analyst rating": [bearish]
         }
 
         self.hints = ["Always set a take profit!", "It's just money :)", ""]
@@ -2455,6 +2948,8 @@ class CoveredCall(OptionStrategy):
 
             "short term outlook": [neutral, bullish],
             "mid term outlook": [neutral, bullish],
+
+            "analyst rating": [neutral, bullish]
         }
 
         self.hints = ["Always set a take profit!", "It's just money :)"]
@@ -2512,6 +3007,8 @@ class VerticalDebitSpread(OptionStrategy):
 
             "short term outlook": [bullish] if opt_type == "c" else [bearish],
             "mid term outlook": [neutral, bullish] if opt_type == "c" else [neutral, bearish],
+
+            "analyst rating": [neutral, bullish] if opt_type == "c" else [neutral, bearish]
         }
 
         self.hints = ["Always set a take profit!", "It's just money :)"]
@@ -2550,16 +3047,22 @@ class VerticalDebitSpread(OptionStrategy):
             chain = chain.remove_by_name(long_leg)
             short_leg = chain.expiration_close_to_dte(45).short().n_otm_strike_put(1, self.env_container.u_ask)
 
-        # combined pos
-        cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker)
-        cp.add_option_from_option_chain(long_leg)
-        cp.add_option_from_option_chain(short_leg)
+        if not long_leg.empty() and not short_leg.empty():
 
-        # 1/2 strike width
-        self.tp_percentage = \
-            0.5 * 100 * abs(long_leg.options.loc[0, "strike"] - short_leg.options.loc[0, "strike"]) / cp.max_profit
+            # combined pos
+            cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker)
+            cp.add_option_from_option_chain(long_leg)
+            cp.add_option_from_option_chain(short_leg)
 
-        return cp
+            # 1/2 strike width
+            self.tp_percentage = \
+                0.5 * 100 * abs(long_leg.options.loc[0, "strike"] - short_leg.options.loc[0, "strike"]) / cp.max_profit
+
+            return cp
+
+        else:
+            _debug(f'Short leg / long leg is empty in {self.name}, returning None')
+            return None
 
 
 class VerticalCreditSpread(OptionStrategy):
@@ -2585,6 +3088,8 @@ class VerticalCreditSpread(OptionStrategy):
 
             "short term outlook": [bullish] if opt_type == "p" else [bearish],
             "mid term outlook": [neutral, bullish] if opt_type == "p" else [neutral, bearish],
+
+            "analyst rating": [neutral, bullish] if opt_type == "p" else [neutral, bearish]
         }
 
         self.hints = ["Call spreads are more liquid and tighter",
@@ -2726,7 +3231,53 @@ class ShortStrangle(OptionStrategy):
     ...
 
 
+class CashSecuredPut(OptionStrategy):  # todo -> wheel
+    ...
+    """
+    low price
+    high options oi & vol
+    positive earnings per share
+    +dividend
+    positive mid/long term outlook
+    positive analyst rating
+    at least neutral short term outlook
+    sell 30% P(ITM) put option
+    roll if stock gets close to strike
+    sell at half credit
+    sell at 21 dte
+    buy close to 45 dte
+    """
+
+
 # </editor-fold>CLO
 
+def get_sp500_tickers(exclude_sub_industries=('Pharmaceuticals',
+                                              'Managed Health Care',
+                                              'Health Care Services')):
+    df = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]
+    df = df[~df['GICS Sub-Industry'].isin(exclude_sub_industries)]
+    return df['Symbol'].values.tolist()
 
-propose_strategies("AMC")
+
+def get_high_option_vol_tickers(exclude_sub_industries=('Pharmaceuticals',
+                                                        'Managed Health Care',
+                                                        'Health Care Services')):
+    ...
+
+
+def get_market_recommendations(start_from=None):
+    constraints = StrategyConstraints(strict_mode=True, min_oi30=100, min_vol30=1000, min_sinle_opt_vol=100)
+    l = get_sp500_tickers()
+    if start_from:
+        l = l[l.index(start_from):]
+    for t in l:
+        try:
+            propose_strategies(t, constraints, auto=True)
+        except Exception as e:
+            _warn(f'Exception occured when getting strategies for ticker {t}: {e}')
+            continue
+
+
+get_market_recommendations("BK")  # got to IFF
+
+#propose_strategies("acn", StrategyConstraints(strict_mode=True, min_oi30=100, min_vol30=1000, min_sinle_opt_vol=100), auto=False)
