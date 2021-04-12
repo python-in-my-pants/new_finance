@@ -534,6 +534,9 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints, auto: bool 
     # todo do sth if ask is 0 (stock or option)
     # should be done by filtering out options with 0 ask in get_option_chain
 
+    # todo weiht start dtes with vix (mean ca 16) if vix is 14 for example, 1-(14/16) = x; sqrt(1/x) * dte = new dte
+    #  45 dte is base
+
     ticker = ticker.upper()
 
     print(f'\nChecking ticker {ticker} ...\n')
