@@ -17,6 +17,8 @@ from typing import Optional
 import matplotlib.ticker as plticker
 from pprint import pprint as pp
 from yahoo_fin import stock_info as si
+from DDict import DDict
+from MonteCarlo import MonteCarloSimulator
 
 """
 import ipdb
@@ -48,17 +50,6 @@ def _debug(*args):
     if debug:
         print()
         print(*args)
-
-
-class DDict(dict):
-    """dot.notation access to dictionary attributes"""
-
-    __getattr__ = dict.get
-    __setattr__ = dict.__setitem__
-    __delattr__ = dict.__delitem__
-
-    def __deepcopy__(self, memo=None):
-        return DDict(deepcopy(dict(self), memo=memo))
 
 
 class RiskWarning(Warning):
@@ -259,9 +250,11 @@ def get_underlying_outlook(symbol):
         resp_text = response.read()
         soup = BeautifulSoup(resp_text, 'html.parser')
 
-        analyst_rating = soup.findAll("div", attrs={'class': 'block__average_value'})[3].find("span").text
-
-        analyst_rating = (float(analyst_rating) - 3) / 2
+        try:
+            analyst_rating = soup.findAll("div", attrs={'class': 'block__average_value'})[3].find("span").text
+            analyst_rating = (float(analyst_rating) - 3) / 2
+        except IndexError:
+            analyst_rating = 0
 
     return outlooks[0], outlooks[1], outlooks[2], analyst_rating
 
@@ -421,7 +414,7 @@ class MetaData:
     @staticmethod
     def from_file(filename):
         try:
-            f = pickle.load(open("meta/" + filename + ".pickle", "rb"))
+            f = pickle.load(open(filename, "rb"))
             return f
         except Exception as e:
             print("While reading the file", filename, "an exception occurred:", e)
@@ -494,6 +487,10 @@ def download_meta_data(ticker, min_single_opt_vol=0) -> Optional[MetaData]:
 # </editor-fold>
 
 
+def get_monte_carlo(ticker):
+    return MonteCarloSimulator(tickers=ticker)
+
+
 class StrategyConstraints:
 
     def __init__(self, defined_risk_only=True, avoid_events=True,
@@ -518,7 +515,8 @@ class StrategyConstraints:
         self.defined_risk_only = defined_risk_only
 
 
-def propose_strategies(ticker: str, strat_cons: StrategyConstraints, auto: bool = False):
+def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
+                       monte_carlo: MonteCarloSimulator, auto: bool = False):
     # todo get short term price outlook (technical analysis, resistances from barchart.com etc)
 
     # todo supply custom environment (like outlooks)
@@ -553,7 +551,7 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints, auto: bool 
     meta = get_meta_data(ticker, strat_cons.min_sinle_opt_vol)
 
     if meta is None:
-        _warn(f'Receiving empty data for ticker {ticker}!')
+        #_warn(f'Receiving empty data for ticker {ticker}!')
         return []
 
     print(f'Stock info:\n\n'
@@ -704,7 +702,8 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints, auto: bool 
         "analyst rating": meta.analyst_rating
     }
 
-    env_con = EnvContainer(env, meta.option_chain, meta.u_bid, meta.u_ask, ticker, strat_cons.min_sinle_opt_vol)
+    env_con = EnvContainer(env, monte_carlo, meta.option_chain, meta.u_bid, meta.u_ask, ticker,
+                           strat_cons.min_sinle_opt_vol)
 
     """lc = VerticalDebitSpread(env_con, threshold=-1)
     print(lc)
@@ -1538,7 +1537,7 @@ class OptionChain:
             self.options = pd.DataFrame()
 
     def empty(self):
-        return len(self.options) == 0
+        return self.options.empty
 
     def __repr__(self):
         return self.options.to_string()
@@ -1552,6 +1551,8 @@ class OptionChain:
 
     def puts(self):
         _debug("Filter for puts")
+        if self.options.empty:
+            return self
         f = self.options.loc[self.options['contract'] == "p"]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1559,6 +1560,8 @@ class OptionChain:
 
     def calls(self):
         _debug("Filter for calls")
+        if self.options.empty:
+            return self
         f = self.options.loc[self.options['contract'] == "c"]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1566,6 +1569,8 @@ class OptionChain:
 
     def long(self):
         _debug("Filter for longs")
+        if self.options.empty:
+            return self
         f = self.options.loc[self.options['direction'] == "long"]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1573,6 +1578,8 @@ class OptionChain:
 
     def short(self):
         _debug("Filter for shorts")
+        if self.options.empty:
+            return self
         f = self.options.loc[self.options['direction'] == "short"]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1588,6 +1595,8 @@ class OptionChain:
         :return: all options expiring between (inclusive) lower_dte and upper_dte
         """
         _debug(f'Filter for expiration in range {lower_dte}-{upper_dte} DTE')
+        if self.options.empty:
+            return self
         dates = pd.date_range(start=datetime.now() + timedelta(days=lower_dte),
                               end=datetime.now() + timedelta(days=upper_dte),
                               normalize=True)
@@ -1604,6 +1613,8 @@ class OptionChain:
         :return:
         """
         _debug(f'Filter for expiration before {exp_date}')
+        if self.options.empty:
+            return self
 
         f = self.options.loc[self.options['expiration'] <= exp_date]  # works because dates are in ISO form
         if type(f) is pd.Series:
@@ -1617,6 +1628,8 @@ class OptionChain:
         :return:
         """
         _debug("Filter for exp date:", exp_date)
+        if self.options.empty:
+            return self
         f = self.options.loc[[self.options['expiration'] == exp_date]]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1629,6 +1642,8 @@ class OptionChain:
         :return:
         """
         _debug("Filter for expiration close to", dte, "dte")
+        if self.options.empty:
+            return self
         f = self.options.loc[self.options['expiration'] == get_closest_date(self.expirations, dte)]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1641,6 +1656,8 @@ class OptionChain:
         :return:
         """
         _debug(f"Filter for {i}th expiration: ", self.expirations[i])
+        if self.options.empty:
+            return self
         f = self.options.loc[self.options['expiration'] == self.expirations[i]]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1652,6 +1669,8 @@ class OptionChain:
 
     def greek(self, g, lower=0, upper=1):
         _debug(f'Filter for {g} in range {lower}-{upper}')
+        if self.options.empty:
+            return self
         f = self.options.loc[(lower <= self.options[g]) & (upper >= self.options[g])]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1659,6 +1678,8 @@ class OptionChain:
 
     def greek_close_to(self, greek, d):
         _debug(f'Filter for {greek} close to {d}')
+        if self.options.empty:
+            return self
         f = self.options.loc[min_closest_index(self.options[greek].to_list(), d)]
         if type(f) is pd.Series:
             f = f.to_frame().T  # TODO ???
@@ -1704,6 +1725,9 @@ class OptionChain:
         :param n:
         :return: put that is n strikes OTM
         """
+
+        if self.options.empty:
+            return self
 
         # puts or calls?
         contracts = self.options["contract"].unique().tolist()
@@ -1780,12 +1804,16 @@ class OptionChain:
 
     # <editor-fold desc="IV">
     def iv_range(self, lower=0, upper=10000):
+        if self.options.empty:
+            return self
         f = self.options.loc[(lower <= self.options["IV"]) & (upper >= self.options["IV"])]
         if type(f) is pd.Series:
             f = f.to_frame().T
         OptionChain(f)
 
     def iv_close_to(self, d):
+        if self.options.empty:
+            return self
         f = self.options.loc[min_closest_index(self.options["IV"].to_list(), d)]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1796,6 +1824,8 @@ class OptionChain:
     # <editor-fold desc="p(ITM)">
     def itm_prob_close_to(self, p):
         _debug(f'Filter for P(ITM) close to {p}')
+        if self.options.empty:
+            return self
         f = self.options.loc[min_closest_index(self.options["P(ITM)"].to_list(), p)]
         if type(f) is pd.Series:
             f = f.to_frame().T  # TODO ???
@@ -1803,6 +1833,8 @@ class OptionChain:
 
     def itm_prob_range(self, g, lower=0, upper=1):
         _debug(f'Filter for {g} in range {lower}-{upper}')
+        if self.options.empty:
+            return self
         f = self.options.loc[(lower <= self.options["P(ITM)"]) & (upper >= self.options["P(ITM)"])]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1812,6 +1844,8 @@ class OptionChain:
 
     def volume(self, min_vol):
         _debug(f"Filter for volume > {min_vol}")
+        if self.options.empty:
+            return self
         f = self.options.loc[self.options['volume'] > min_vol]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1819,12 +1853,18 @@ class OptionChain:
 
     def open_interest(self, min_oi):
         _debug(f"Filter for single option open interest > {min_oi}")
+        if self.options.empty:
+            return self
         f = self.options.loc[self.options['OI'] > min_oi]
         if type(f) is pd.Series:
             f = f.to_frame().T
         return OptionChain(f)
 
     def non_zero_ask(self, internal=False):
+        if self.options.empty:
+            if internal:
+                return self.options
+            return self
         f = self.options.loc[self.options['ask'] > 0.0]
         if type(f) is pd.Series:
             f = f.to_frame().T
@@ -1866,6 +1906,8 @@ class OptionChain:
         :param used_chain:
         :return:
         """
+        if self.options.empty or used_chain.empty():
+            return self
         name = used_chain.options.loc[list(used_chain.options.index.values)[0], "name"]
         tmp_chain = self.options.drop(self.options[self.options["name"] == name].index)
         return OptionChain(chain=tmp_chain)
@@ -1874,7 +1916,7 @@ class OptionChain:
 # todo TEST!
 class CombinedPosition:
 
-    def __init__(self, pos_dict, u_bid, u_ask, ticker):
+    def __init__(self, pos_dict: dict, u_bid: float, u_ask: float, ticker: str, mcs: MonteCarloSimulator):
         """
         :param pos_dict:  (option symbol/stock ticker): position
         """
@@ -1889,13 +1931,16 @@ class CombinedPosition:
         self.u_ask = u_ask
         self.underlying = ticker.split()[0]
 
+        self.mcs = mcs
+
         self.cost = -1
         self.risk = -1
         self.bpr = -1
         self.break_even = -1
         self.max_profit = -1
         self.rom = -1
-        self.p50 = -1
+        self.p50 = -1  # prob of reaching 50 % of max rofit until first expiration
+        self.pop = -1
 
         if self.pos_dict.values():
             self.update_status()
@@ -2000,6 +2045,9 @@ class CombinedPosition:
                f'\n' \
                f'\n'
 
+    def empty(self):
+        return not any([pos.quantity for pos in list(self.pos_dict.values())])
+
     def update_status(self):
         self.cost = self.get_cost()
         self.greeks = self.get_greeks()
@@ -2009,6 +2057,20 @@ class CombinedPosition:
         self.break_even = self.get_break_even()
         self.max_profit = self.get_max_profit()
         self.rom = self.get_rom()
+
+        # pop ptp psl
+        # todo mcs gives only option value? what about naked shorts for example? stock in comb pos? ->
+        #  should be ok tho, greeks are covering this - NO: theta does not affect stock, neither does gamma (CC)
+        # split mcs between stock part and option part
+        prob_dict = self.mcs.get_pop_pn_sl(self.underlying, self.cost-self.stock.cost,
+                                           self.greeks["delta"], self.greeks["gamma"], self.greeks["theta"],
+                                           self.dte_until_first_exp(), self.max_profit,
+                                           stock_quantity=self.stock.quantity)
+        self.pop = prob_dict.pop
+        self.p50 = prob_dict.p_tp
+
+    def dte_until_first_exp(self):
+        return date_str_to_dte(min([p.asset.expiration for p in self.pos_dict.values() if type(p) is Option]))
 
     def cover_short_with(self, short_pos_name: str, long_pos_name: str, covering_long_q):
         if short_pos_name in self.coverage_dict.keys():
@@ -2279,14 +2341,17 @@ class CombinedPosition:
     """def add_position_from_df(self, df: pd.DataFrame):
         self.add_position(Position.row_to_position(df.loc[0, :], self.u_ask))"""
 
-    def add_option_from_option_chain(self, oc: OptionChain):
+    def add_option_from_option_chain(self, oc: OptionChain, no_update: bool = False):
         """
         takes the first entry of option chains options and adds the option as position
-        :param oc:
+        :param no_update: can be set True when adding first legs of a spread for example, must be false for last leg
+        :param oc: option chain to add from
         :return:
         """
+        if oc.empty():
+            return
         oc.options.reset_index(inplace=True)
-        self._add_position(Position.row_to_position(oc.options.loc[0, :], self.u_ask))
+        self._add_position(Position.row_to_position(oc.options.loc[0, :], self.u_ask), no_update=no_update)
 
     """def add_positions(self, *positions):
         if type(positions[0]) is list:
@@ -2340,6 +2405,7 @@ class CombinedPosition:
         comb_pos.add_positions(positions_to_add)
         return comb_pos"""
 
+    # todo
     def get_bpr(self):
         if self.risk is not float('inf'):
             return self.risk
@@ -2347,6 +2413,8 @@ class CombinedPosition:
             return -1  # todo
 
     def get_break_even(self):
+        if self.empty():
+            return 0
         dist = self.get_profit_dist_on_first_exp()
         return min_closest_index(dist, 0.0) / 100
 
@@ -2461,14 +2529,6 @@ class CombinedPosition:
         """
         return self.max_profit / self.bpr * 0.5
 
-    def _get_50(self):
-        # todo
-        """
-        Use monte carlo sim...
-        :return:
-        """
-        return 0
-
 
 class VerticalSpread(CombinedPosition):
 
@@ -2549,12 +2609,14 @@ class EnvContainer:
 
     def __init__(self,
                  env: dict,
+                 mc: MonteCarloSimulator,
                  chain: OptionChain,
                  u_bid: float,
                  u_ask: float,
                  ticker: str,
                  min_per_option_vol: int):
         self.env = env
+        self.mc = mc
         self.chain = chain
         self.u_bid = u_bid
         self.u_ask = u_ask
@@ -2767,7 +2829,14 @@ class OptionStrategy:
             _warn("Cannot set strategy close date because no positions are existing yet")
 
     def _set_p50(self):
-        self.p50 = -1
+        self.p50 = self.env_container.mc.get_pop_pn_sl(ticker=self.env_container.ticker,
+                                                       opt_price=self.positions.cost,
+                                                       days=self.positions.dte_until_first_exp(),
+                                                       delta=self.positions.greeks["delta"],
+                                                       gamma=self.positions.greeks["gamma"],
+                                                       theta=self.positions.greeks["theta"],
+                                                       tp=...,
+                                                       sl=...)
 
     def _check_liquidity(self):
         return self._check_spread() and self._check_vol()
@@ -2785,6 +2854,15 @@ class OptionStrategy:
                     f'{pos.asset.vol} < {self.env_container.min_per_option_vol}\n')
                 return False
         return True
+
+    def _build_comb_pos(self, *legs):
+        if all(legs):  # all legs have a quantity different from 0
+            cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker)
+            for leg in legs:
+                cp.add_option_from_option_chain(leg)
+            return cp
+        else:
+            return None
 
 
 class DummyStrat(OptionStrategy):
@@ -2873,10 +2951,9 @@ class LongCall(OptionStrategy):
                 .expiration_close_to_dte(60) \
                 .delta_close_to(0.45)
 
-        cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker)
-        cp.add_option_from_option_chain(df)
+        cp = self._build_comb_pos(df)
 
-        return cp
+        return cp if not cp.empty() else None
 
 
 class LongPut(OptionStrategy):
@@ -2929,10 +3006,9 @@ class LongPut(OptionStrategy):
                 .expiration_close_to_dte(60) \
                 .delta_close_to(0.45)
 
-        cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker)
-        cp.add_option_from_option_chain(df)
+        cp = self._build_comb_pos(df)
 
-        return cp
+        return cp if not cp.empty() else None
 
 
 class CoveredCall(OptionStrategy):
@@ -2985,12 +3061,9 @@ class CoveredCall(OptionStrategy):
             .expiration_close_to_dte(45) \
             .delta_close_to(0.3)  # shouldnt this be -0.3???
 
-        cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker)
+        cp = self._build_comb_pos(oc)
 
-        cp.add_option_from_option_chain(oc)
-        cp.add_asset(Stock(self.env_container.ticker, self.env_container.u_bid, self.env_container.u_ask), 100)
-
-        return cp
+        return cp if not cp.empty() else None
 
 
 class VerticalDebitSpread(OptionStrategy):
@@ -3050,22 +3123,13 @@ class VerticalDebitSpread(OptionStrategy):
             chain = chain.remove_by_name(long_leg)
             short_leg = chain.expiration_close_to_dte(45).short().n_otm_strike_put(1, self.env_container.u_ask)
 
-        if not long_leg.empty() and not short_leg.empty():
+        cp = self._build_comb_pos(long_leg, short_leg)
 
-            # combined pos
-            cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker)
-            cp.add_option_from_option_chain(long_leg)
-            cp.add_option_from_option_chain(short_leg)
-
-            # 1/2 strike width
+        if not cp.empty():
             self.tp_percentage = \
                 0.5 * 100 * abs(long_leg.options.loc[0, "strike"] - short_leg.options.loc[0, "strike"]) / cp.max_profit
 
-            return cp
-
-        else:
-            _debug(f'Short leg / long leg is empty in {self.name}, returning None')
-            return None
+        return cp if not cp.empty() else None
 
 
 class VerticalCreditSpread(OptionStrategy):
@@ -3144,16 +3208,14 @@ class VerticalCreditSpread(OptionStrategy):
             # sell 30-35 delta
             short_leg = chain.expiration_close_to_dte(45).puts().short().delta_close_to(0.3)
 
-        # combined pos
-        cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker)
-        cp.add_option_from_option_chain(long_leg)
-        cp.add_option_from_option_chain(short_leg)
+        cp = self._build_comb_pos(long_leg, short_leg)
 
-        # 1/2 strike width
-        self.tp_percentage = \
-            0.5 * 100 * abs(long_leg.options.loc[0, "strike"] - short_leg.options.loc[0, "strike"]) / cp.max_profit
+        if not cp.empty():
+            # 1/2 strike width
+            self.tp_percentage = \
+                0.5 * 100 * abs(long_leg.options.loc[0, "strike"] - short_leg.options.loc[0, "strike"]) / cp.max_profit
 
-        return cp
+        return cp if not cp.empty() else None
 
     def _get_personal_variation(self):
         return None
@@ -3270,17 +3332,25 @@ def get_high_option_vol_tickers(exclude_sub_industries=('Pharmaceuticals',
 
 def get_market_recommendations(start_from=None):
     constraints = StrategyConstraints(strict_mode=True, min_oi30=100, min_vol30=1000, min_sinle_opt_vol=100)
-    l = get_sp500_tickers()
+    tickers = get_sp500_tickers()
+    mcs = MonteCarloSimulator(tickers)
     if start_from:
-        l = l[l.index(start_from):]
-    for t in l:
+        tickers = tickers[tickers.index(start_from):]
+    for t in tickers:
         try:
-            propose_strategies(t, constraints, auto=True)
+            propose_strategies(t, constraints, mcs, auto=True)
         except Exception as e:
             _warn(f'Exception occured when getting strategies for ticker {t}: {e}')
             continue
 
 
-get_market_recommendations("BK")  # got to IFF
+# get_market_recommendations()  # got to mco
 
-#propose_strategies("acn", StrategyConstraints(strict_mode=True, min_oi30=100, min_vol30=1000, min_sinle_opt_vol=100), auto=False)
+
+propose_strategies("abt",
+                   StrategyConstraints(strict_mode=False,
+                                       min_oi30=100, 
+                                       min_vol30=1000, 
+                                       min_sinle_opt_vol=100),
+                   MonteCarloSimulator(tickers=["abt"]),
+                   auto=False,)
