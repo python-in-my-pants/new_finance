@@ -1895,9 +1895,10 @@ if __name__ == "__main__":
     assert_close(black_scholes('c', fs=72, x=75, t=1, r=0.09, v=0.19)[5], 38.7325050173)"""
 
 
-def get_greeks(option_type, underlying_price, strike_price, annual_dte, risk_free_rate, option_price, dividend=0, iv=None):
+def get_greeks(option_type, underlying_price, strike_price, annual_dte, risk_free_rate, iv, dividend=0):
     """
 
+    :param iv:
     :param option_type:
     :param underlying_price:
     :param strike_price:
@@ -1908,10 +1909,12 @@ def get_greeks(option_type, underlying_price, strike_price, annual_dte, risk_fre
     :return: opt_price, iv, delta, gamma, theta, vega, rho
     """
 
+    """
     if iv is None:
         iv = amer_implied_vol(option_type, underlying_price, strike_price, annual_dte, risk_free_rate, dividend,
                               option_price, max_steps=1000)
-        print("asdfaösdfkjasödfkjas")
+        print("No IV was supplied for get_greeks in option_greeks.py")
+    """
 
     opt_price, delta, gamma, theta, vega, rho = \
         american(option_type, underlying_price, strike_price, annual_dte, risk_free_rate, dividend, iv)

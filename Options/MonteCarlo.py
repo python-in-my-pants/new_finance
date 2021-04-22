@@ -4,6 +4,7 @@ from pandas_datareader import data as wb
 from scipy.stats import norm, gmean, cauchy
 import pickle
 from DDict import DDict
+import time
 
 pd.set_option('display.float_format', lambda x: '%.8f' % x)
 
@@ -21,7 +22,7 @@ class MonteCarloSimulator(object):
     ticker, days, iterations -> pop, p_n, p_sl
     """
 
-    def __init__(self, tickers: list, days: int = 1000, iterations: int = 10000):
+    def __init__(self, tickers: list, days: int = 1000, iterations: int = 1000):
         tickers.append("msft")
         self.tickers = tickers
         self.daily_close_prices_all_tickers = self.load_stock_data_dict(tickers)  # ticker ->
@@ -58,7 +59,7 @@ class MonteCarloSimulator(object):
 
     def load_stock_data_dict(self, tickers: list = None) -> pd.DataFrame:
         try:
-            print("Reading from file ...")
+            print("Reading stock data dict file ...")
             f = pickle.load(open("stock_data_dict.pickle", "rb"))
             avail_tickers = f.columns.values.tolist()
             if not set(tickers) - set(avail_tickers):
@@ -246,7 +247,15 @@ class MonteCarloSimulator(object):
         :return:
         """
 
-        # TODO stock q -> stock delta ... sub from overall delta of comb pos? and add future stock price
+        # TODO adjust for (naked) shorts, currently pop=100 theta??
+        # TODO purely negative spreads have pop > 0, why?
+        # tODO do we get rid of zero returns for days where no price data was available yet?
+
+        # whats the diff between option price calc here and break even calc in options strat calc?
+        # ergebnis muss iwo auf exp p/l graph liegen bei exp, abhängig vom stock price
+
+        print("\nGetting probabilities ...")
+        start = time.time()
 
         days += 1
         if days > self.days:
@@ -256,11 +265,21 @@ class MonteCarloSimulator(object):
         if stock_quantity != 0:
             delta -= stock_quantity
 
-        # get prices of all iterations until n days in the future
-        simulated_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker].iloc[:days, 1:]
+        invert = False
+        if opt_price < 0:
+            opt_price = -opt_price
+            invert = True
 
-        # stock gains
-        stock_gains = simulated_stock_prices - simulated_stock_prices.iloc[0]
+        # get prices of all iterations until n days in the future
+        simulated_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[:days, 1:]
+
+        if stock_quantity != 0:
+            # stock gains
+            stock_gains = simulated_stock_prices - simulated_stock_prices.iloc[0]
+            stock_gains *= stock_quantity
+
+        tmp = simulated_stock_prices.iloc[-1]
+        print(len(tmp[tmp > 122.5]))
 
         # df[day, iteration]
         future_option_prices = pd.DataFrame(np.zeros_like(simulated_stock_prices))
@@ -269,11 +288,19 @@ class MonteCarloSimulator(object):
         # set first row to current option price
         future_option_prices.iloc[0, :] = opt_price
 
+        def get_option_price(stock_price, ):
+            ...
+
         # calculate future option prices based on simulated underlying prices and delta and gamma
         # todo add vega influence
         # opt_price_tomorrow = opt_price_today + u_diff * delta
         # next_delta = old_delta + u_diff * gamma
-        for d in range(1, days):
+        for d in range(1, days):  # this doesn t end up on P/L graph on exp, why?
+            # theta change over time
+            # gamma change on moneyness
+            # theta change on moneyness
+            # vega influence
+            # IV change on u price
             u_diff = simulated_stock_prices.iloc[d] - simulated_stock_prices.iloc[d-1]
             future_option_prices.iloc[d] = future_option_prices.iloc[d-1] + u_diff * delta + theta
             delta += u_diff * gamma
@@ -281,6 +308,9 @@ class MonteCarloSimulator(object):
 
         # substract current option price from all future option prices
         future_option_prices -= opt_price
+
+        if invert:
+            future_option_prices = -future_option_prices
 
         if stock_quantity != 0:
             future_option_prices += stock_gains
@@ -294,7 +324,7 @@ class MonteCarloSimulator(object):
         # and save numbers of occurrences
 
         # a) check end result > 0
-        end_prices = list(future_option_prices.iloc[-1])  # [1:]
+        end_prices = list(future_option_prices.iloc[-1])
         above_zero = sum(1 for i in end_prices if i > 0)
 
         # b) check if tp/sl was hit todo vectorize
@@ -309,15 +339,18 @@ class MonteCarloSimulator(object):
                     sl_hit += 1
                     break
 
+        print(f"Getting probs took {time.time() - start:.2f} s")
+
         return DDict({
-            "pop": round(above_zero / _iterations, 5),
+            "prob_of_profit": round(above_zero / _iterations, 5),
             "p_tp": round(tp_hit / _iterations, 5),
             "p_sl": round(sl_hit / _iterations, 5),
         })
 
 
-mcs = MonteCarloSimulator(["expr"])
-# print(mcs.p_greater_n_end("expr", 4))
-print(mcs.get_pop_pn_sl("expr", opt_price=0.30, delta=-0.29, gamma=0.23, theta=-0.00578,
-                        tp=0.15, sl=-0.10, days=44))
+if __name__ == "main":
+    mcs = MonteCarloSimulator(["abt"])
+    # print(mcs.p_greater_n_end("expr", 4))
+    print(mcs.get_pop_pn_sl("abt", opt_price=0.30, delta=-0.29, gamma=0.23, theta=-0.00578,
+                            tp=0.15, sl=-0.10, days=44))
 
