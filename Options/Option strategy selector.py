@@ -2161,8 +2161,8 @@ class CombinedPosition:
                 def extr_projection(x):  # todo use better approx for theta decay up to 200 dte
                     return sqrt(1 - x ** 2)  # circle upper right for extrinsic 90 dte to 0 dte
 
-                def scale(x):
-                    return -x / theta_decay_start_dte + 1  # maps 90...0 to 0...1
+                def scale(x):  # todo min is new
+                    return -min(x, theta_decay_start_dte) / theta_decay_start_dte + 1  # maps 90...0 to 0...1
 
                 strike_diff = abs(position_to_cover.asset.strike - lp.asset.strike)
 
@@ -2180,7 +2180,7 @@ class CombinedPosition:
 
                 l_dte = lp.asset.dte
                 s_dte = position_to_cover.asset.dte
-                dte_diff = l_dte - s_dte
+                dte_diff = l_dte - s_dte  # what if this is negative??
 
                 if dte_diff > theta_decay_start_dte:
                     given_up_extr_by_exe = current_extr + lp.asset.theta * dte_diff
@@ -2526,7 +2526,7 @@ class CombinedPosition:
         snap_cursor = SnappingCursor(ax1, line)
         fig.canvas.mpl_connect('motion_notify_event', snap_cursor.on_mouse_move)
 
-        s = self.underlying.upper() + "\n"
+        s = self.underlying.upper() + " @ " + str(self.u_ask) + "\n"
         for pos in list(self.pos_dict.values()):
             if pos.quantity != 0:
                 s += pos.__repr__() + "\n"
@@ -2727,15 +2727,19 @@ class OptionStrategy:
                f'{indent}\tρ = {self.greek_exposure["rho"]}' \
                f'\n' \
                f'\n' \
-               f'{indent} Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} DTE)' \
+               f'{indent}      Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} DTE)' \
                f'\n' \
-               f'{indent}      P50: {self.p50 * 100:.2f} %' \
+               f'{indent}\n           P50: {self.p50 * 100:.2f} %' \
                f'\n' \
-               f'{indent}      PoP: {self.prob_of_profit * 100:.2f} %' \
+               f'{indent}P50 Expectance: {self.p50 * self.positions.max_profit * 0.5:.2f} $' \
                f'\n' \
-               f'{indent}Stop loss: {self.sl_percentage / 100 * self.positions.risk:.2f} $' \
+               f'{indent}\n           PoP: {self.prob_of_profit * 100:.2f} %' \
                f'\n' \
-               f'{indent}    Hints: {h}'
+               f'{indent}    Expectance: {self.prob_of_profit * self.positions.max_profit:.2f} $' \
+               f'\n' \
+               f'{indent}\n     Stop loss: {self.sl_percentage / 100 * self.positions.risk:.2f} $' \
+               f'\n' \
+               f'{indent}         Hints: {h}'
 
     def repr(self, t=0):
 
@@ -2948,7 +2952,7 @@ class LongCall(OptionStrategy):
         self.hints = ["Always set a take profit!", "It's just money :)"]
 
         self.tp_percentage = 100
-        self.sl_percentage = 101
+        self.sl_percentage = 0
 
         self.close_dte = 10000
         self.close_perc = 100
@@ -3003,7 +3007,7 @@ class LongPut(OptionStrategy):
         self.hints = ["Always set a take profit!", "It's just money :)", ""]
 
         self.tp_percentage = 100
-        self.sl_percentage = 101
+        self.sl_percentage = 0
 
         self.close_dte = 10000
         self.close_perc = 100
@@ -3060,7 +3064,7 @@ class CoveredCall(OptionStrategy):
         self.hints = ["Always set a take profit!", "It's just money :)"]
 
         self.tp_percentage = 50
-        self.sl_percentage = 100
+        self.sl_percentage = 0
 
         self.close_dte = 21
         self.close_perc = 50
@@ -3119,7 +3123,7 @@ class VerticalDebitSpread(OptionStrategy):
         self.hints = ["Always set a take profit!", "It's just money :)"]
 
         self.tp_percentage = 50  # todo 1/2 strike width, how to do this?
-        self.sl_percentage = 101
+        self.sl_percentage = 0
 
         self.close_dte = 10000
         self.close_perc = 100
@@ -3154,7 +3158,7 @@ class VerticalDebitSpread(OptionStrategy):
 
         if long_leg and short_leg:
             cp = self._build_comb_pos(long_leg, short_leg)
-            if not cp.empty() and cp.max_profit > 0:  # TODO remove condition for debugging
+            if not cp.empty() and cp.max_profit > 0:
                 self.tp_percentage = \
                     0.5 * 100 * abs(
                         long_leg.options.loc[0, "strike"] - short_leg.options.loc[0, "strike"]) / cp.max_profit
@@ -3377,13 +3381,22 @@ def get_market_recommendations(start_from=None):
 # get_market_recommendations()  # got to mco
 
 
-"""propose_strategies("abt",
+propose_strategies("v",
                    StrategyConstraints(strict_mode=False,
                                        min_oi30=100, 
                                        min_vol30=1000, 
                                        min_sinle_opt_vol=100),
-                   MonteCarloSimulator(tickers=["abt"]),
-                   auto=False,)"""
+                   MonteCarloSimulator(tickers=["v"]),
+                   auto=False,)
+
+# AAPL
+# theta for long call is huge, is this correct?
+# pop & p50 for long call are 0, y?
+
+# V
+# math domain error
+
+# speads: check both legs have same exp, otherwise its a calendar
 
 
 def model_test():
@@ -3433,4 +3446,3 @@ def model_test():
     print(f'Bjerksund-Strensland took {time() - start2:.8f} seconds: {opt_price}')
 
 
-model_test()

@@ -279,7 +279,7 @@ class MonteCarloSimulator(object):
             stock_gains *= stock_quantity
 
         tmp = simulated_stock_prices.iloc[-1]
-        print(len(tmp[tmp > 122.5]))
+        print("kamino", len(tmp[tmp > 122.5]))
 
         # df[day, iteration]
         future_option_prices = pd.DataFrame(np.zeros_like(simulated_stock_prices))
