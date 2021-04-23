@@ -3421,7 +3421,9 @@ propose_strategies("afl",
 # pop & p50 for long call are 0, y?
 
 # Exception occured when getting strategies for ticker AFL: single positional indexer is out-of-bounds
-
+# Getting options meta data failed for ticker BLK with exception: invalid literal for int() with base 10: '\n'
+# Exception occured when getting strategies for ticker BIO: 'OptionChain' object has no attribute 'options'
+# Exception occured when getting strategies for ticker AZO: single positional indexer is out-of-bounds
 
 def model_test():
     # EuroOption.price() is best with 5-10 iterations, 1s for 10k iterations
