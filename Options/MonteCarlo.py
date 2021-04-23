@@ -153,9 +153,12 @@ class MonteCarloSimulator(object):
         simulated_dfs = []
 
         for t in range(len(tickers)):
-            sim_df = self.simulate_mc(self.daily_close_prices_all_tickers.iloc[:, t],
-                                      days_forecast + 1,
-                                      iterations)
+            try:
+                sim_df = self.simulate_mc(self.daily_close_prices_all_tickers.iloc[:, t],
+                                          days_forecast + 1,
+                                          iterations)
+            except IndexError as e:
+                print("Index Error:", e)
 
             sim_df['ticker'] = tickers[t]
             cols = sim_df.columns.tolist()

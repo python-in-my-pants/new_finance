@@ -29,8 +29,8 @@ ipdb.set_trace()
 pritn = print
 
 online = True  # all are acn
-force_chain_download = False and online
-force_meta_download = False and online
+force_chain_download = True and online
+force_meta_download = True and online
 
 debug = True
 
@@ -1493,9 +1493,23 @@ class OptionChain:
             # _debug(self.options.head(5))
 
         elif chain_dict is not None:  # create from yahoo data frame
-            self.expirations = list(chain_dict.keys())
+            self.expirations = \
+                [key for key in chain_dict.keys() if chain_dict[key].puts.size > 0 or chain_dict[key].calls.size]
 
-            self.ticker = chain_dict[self.expirations[0]].puts.loc[:, "name"][0][:6]
+            name_df = None
+            for exp in self.expirations:
+                if chain_dict[exp].puts.size > 0:
+                    name_df = chain_dict[exp].puts
+                    break
+                if chain_dict[exp].calls.size > 0:
+                    name_df = chain_dict[exp].calls
+                    break
+
+            if name_df is None:
+                _warn("Emtpy yahoo data frame given to construct option chain")
+                return
+
+            self.ticker = name_df.loc[:, "name"][0][:6]
             self.ticker = ''.join([i for i in self.ticker if not i.isdigit()])
 
             contract_list = list()
@@ -1960,6 +1974,9 @@ class CombinedPosition:
 
     def __repr__(self):
         return self.repr()
+
+    def __bool__(self):
+        return not self.empty()
 
     def repr(self, t=0, short=True):
         indent = "\t" * t
@@ -2983,7 +3000,7 @@ class LongCall(OptionStrategy):
 
         cp = self._build_comb_pos(df)
 
-        return cp if not cp.empty() else None
+        return cp if cp else None
 
 
 class LongPut(OptionStrategy):
@@ -3156,7 +3173,8 @@ class VerticalDebitSpread(OptionStrategy):
             chain = chain.remove_by_name(long_leg)
             short_leg = chain.expiration_close_to_dte(45).short().n_otm_strike_put(1, self.env_container.u_ask)
 
-        if long_leg and short_leg:
+        if long_leg and short_leg and \
+                long_leg.options.loc[0, "expiration"] == short_leg.options.loc[0, "expiration"]:
             cp = self._build_comb_pos(long_leg, short_leg)
             if not cp.empty() and cp.max_profit > 0:
                 self.tp_percentage = \
@@ -3242,13 +3260,15 @@ class VerticalCreditSpread(OptionStrategy):
             # sell 30-35 delta
             short_leg = chain.expiration_close_to_dte(45).puts().short().delta_close_to(0.3)
 
-        if long_leg and short_leg:
+        if long_leg and short_leg and \
+                long_leg.options.loc[0, "expiration"] == short_leg.options.loc[0, "expiration"]:
             cp = self._build_comb_pos(long_leg, short_leg)
             if not cp.empty() and cp.max_profit > 0:
                 self.tp_percentage = \
                     0.5 * 100 * abs(
                         long_leg.options.loc[0, "strike"] - short_leg.options.loc[0, "strike"]) / cp.max_profit
                 return cp
+        _debug("Aborting Vertical Credit Spread ...")
         return None
 
     def _get_personal_variation(self):
@@ -3355,7 +3375,12 @@ def get_sp500_tickers(exclude_sub_industries=('Pharmaceuticals',
                                               'Health Care Services')):
     df = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]
     df = df[~df['GICS Sub-Industry'].isin(exclude_sub_industries)]
-    return df['Symbol'].values.tolist()
+    _l = df['Symbol'].values.tolist()
+
+    # no tickers can be found for this by monte carlo
+    _l.remove("BRK.B")
+    _l.remove("BF.B")
+    return _l
 
 
 def get_high_option_vol_tickers(exclude_sub_industries=('Pharmaceuticals',
@@ -3380,27 +3405,25 @@ def get_market_recommendations(start_from=None):
 
 # get_market_recommendations()  # got to mco
 
-
-propose_strategies("v",
+"""
+propose_strategies("afl",
                    StrategyConstraints(strict_mode=False,
-                                       min_oi30=100, 
-                                       min_vol30=1000, 
+                                       min_oi30=100,
+                                       min_vol30=1000,
                                        min_sinle_opt_vol=100),
-                   MonteCarloSimulator(tickers=["v"]),
-                   auto=False,)
+                   MonteCarloSimulator(tickers=["afl"]),
+                   auto=True, )
+#"""
+
 
 # AAPL
 # theta for long call is huge, is this correct?
 # pop & p50 for long call are 0, y?
 
-# V
-# math domain error
-
-# speads: check both legs have same exp, otherwise its a calendar
+# Exception occured when getting strategies for ticker AFL: single positional indexer is out-of-bounds
 
 
 def model_test():
-
     # EuroOption.price() is best with 5-10 iterations, 1s for 10k iterations
 
     opt_type = "c"
@@ -3441,8 +3464,10 @@ def model_test():
                                                                   risk_free_rate,
                                                                   iv)
         return opt_price
+
     opt_price = sum([b() for _ in range(10000)]) / 10000
 
     print(f'Bjerksund-Strensland took {time() - start2:.8f} seconds: {opt_price}')
 
 
+get_market_recommendations()
