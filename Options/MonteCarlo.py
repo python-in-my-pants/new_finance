@@ -5,8 +5,9 @@ from scipy.stats import norm, gmean, cauchy
 import pickle
 from DDict import DDict
 import time
-
-pd.set_option('display.float_format', lambda x: '%.8f' % x)
+from eu_option import EuroOption
+from CustomDict import CustomDict
+from Utility import timeit
 
 
 class MonteCarloSimulator(object):
@@ -23,8 +24,9 @@ class MonteCarloSimulator(object):
     """
 
     def __init__(self, tickers: list, days: int = 1000, iterations: int = 1000):
+
         tickers.append("msft")
-        self.tickers = tickers
+        self.tickers = [t.upper() for t in tickers]
         self.daily_close_prices_all_tickers = self.load_stock_data_dict(tickers)  # ticker ->
         self.sim_df = self.monte_carlo(tickers, days_forecast=days, iterations=iterations)
         self.days = days
@@ -62,6 +64,8 @@ class MonteCarloSimulator(object):
             print("Reading stock data dict file ...")
             f = pickle.load(open("stock_data_dict.pickle", "rb"))
             avail_tickers = f.columns.values.tolist()
+            tickers = [t.upper() for t in tickers]
+            # print(set(tickers), set(avail_tickers), set(tickers) - set(avail_tickers))
             if not set(tickers) - set(avail_tickers):
                 print("File read successfully!")
                 return f
@@ -157,30 +161,16 @@ class MonteCarloSimulator(object):
                 sim_df = self.simulate_mc(self.daily_close_prices_all_tickers.iloc[:, t],
                                           days_forecast + 1,
                                           iterations)
+                sim_df['ticker'] = tickers[t]
+                cols = sim_df.columns.tolist()
+                cols = cols[-1:] + cols[:-1]
+                sim_df = sim_df[cols]
+                simulated_dfs.append(sim_df)
+
             except IndexError as e:
                 print("Index Error:", e)
 
-            sim_df['ticker'] = tickers[t]
-            cols = sim_df.columns.tolist()
-            cols = cols[-1:] + cols[:-1]
-            sim_df = sim_df[cols]
-            simulated_dfs.append(sim_df)
-
-        simulatedDF = pd.concat(simulated_dfs)
-        return simulatedDF
-
-        """for t in range(len(tickers)):
-
-            y = self.simulate_mc(data.iloc[:, t], (days_forecast + 1), iterations)
-
-            y['ticker'] = tickers[t]
-            cols = y.columns.tolist()
-            cols = cols[-1:] + cols[:-1]
-            y = y[cols]
-            simulated_df.append(y)
-    
-        simulated_df = pd.concat(simulated_df)
-        return simulated_df"""
+        return pd.concat(simulated_dfs)
 
     def p_greater_n_end(self, ticker: str, threshold: float, on: str = 'value'):
         """
@@ -217,17 +207,20 @@ class MonteCarloSimulator(object):
 
         return len(over) / (len(over) + len(less))
 
-    def get_pop(self, ticker):
-        return self.p_greater_n_end(ticker, 0)
+    @timeit
+    def get_pop(self, ticker, days, break_even):
+        # return self.p_greater_n_end(ticker, 0)
 
-    def get_p_n(self, ticker: str, n: int):
-        return self.p_greater_n_end(ticker, n)
+        # todo days-1 or days?
+        end_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[days-1, 1:]
+        return len(end_stock_prices[end_stock_prices > break_even]) / len(end_stock_prices)
 
     # todo sanity check, does this make sense at all?
     # todo test for naked puts, covered calls
-    def get_pop_pn_sl(self, ticker: str, opt_price: float,
-                      delta: float, gamma: float, theta: float,
-                      days: int, tp: float, sl: float = -float('inf'), stock_quantity: float = 0):
+    @timeit
+    def get_pop_pn_sl_old(self, ticker: str, opt_price: float,
+                          delta: float, gamma: float, theta: float,
+                          days: int, tp: float, sl: float = -float('inf'), stock_quantity: float = 0):
         """
         todo build a smart model for future option price prediction with greeks and monte carlo & strike & dte
 
@@ -281,9 +274,6 @@ class MonteCarloSimulator(object):
             stock_gains = simulated_stock_prices - simulated_stock_prices.iloc[0]
             stock_gains *= stock_quantity
 
-        tmp = simulated_stock_prices.iloc[-1]
-        print("kamino", len(tmp[tmp > 122.5]))
-
         # df[day, iteration]
         future_option_prices = pd.DataFrame(np.zeros_like(simulated_stock_prices))
         _iterations = len(future_option_prices.columns.values)
@@ -291,14 +281,11 @@ class MonteCarloSimulator(object):
         # set first row to current option price
         future_option_prices.iloc[0, :] = opt_price
 
-        def get_option_price(stock_price, ):
-            ...
-
         # calculate future option prices based on simulated underlying prices and delta and gamma
         # todo add vega influence
         # opt_price_tomorrow = opt_price_today + u_diff * delta
         # next_delta = old_delta + u_diff * gamma
-        for d in range(1, days):  # this doesn t end up on P/L graph on exp, why?
+        for d in range(1, days):  # this doesnt end up on P/L graph on exp, why?
             # theta change over time
             # gamma change on moneyness
             # theta change on moneyness
@@ -350,10 +337,253 @@ class MonteCarloSimulator(object):
             "p_sl": round(sl_hit / _iterations, 5),
         })
 
+    @timeit
+    def get_pn_psl(self, option_strat, risk_free_rate) -> [float, float]:
+        """
+
+        :param option_strat:
+        :param risk_free_rate:
+        :return:
+        """
+        from Option_strategy_selector import Option
+
+        # ################################################################################################# #
+        # constants
+
+        binomial_iterations = 5  # good tradeoff between accuracy and time
+        stock_price_resolution = 60  # height of matrix
+
+        # ################################################################################################# #
+
+        first_dte = option_strat.positions.dte_until_first_exp()
+        legs = [pos for pos in option_strat.positions.pos_dict.values() if type(pos) is Option]
+        ticker = option_strat.env_container.ticker
+        iv_percentile = option_strat.env_container.env.ivp
+        current_stock_price = option_strat.env_container.u_ask
+        stock_quantity = option_strat.positions.stock.quantity
+
+        tp = option_strat.tp_percentage / 100 * option_strat.positions.max_profit
+        sl = option_strat.sl_percentage / 100 * option_strat.positions.risk
+
+        simulated_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[:first_dte, 1:]
+        iterations = len(simulated_stock_prices.iloc[0, :])
+
+        if iv_percentile > 0.01:
+            # option 2: use iv percentile adjusted to dte and compute outliers separately
+            deviation = first_dte/365.0 * iv_percentile * current_stock_price
+            min_stock = max(option_strat.env_container.u_ask - deviation, 0.01)
+            max_stock = option_strat.env_container.u_ask + deviation
+        else:
+            # option 1: use min & max from monte sim_stock_prices
+            min_stock, max_stock = simulated_stock_prices.min(), simulated_stock_prices.max()
+            if type(min_stock) is pd.Series:
+                min_stock, max_stock = min_stock.min(), max_stock.max()
+
+        stock_price_increment = (max_stock - min_stock) / stock_price_resolution
+
+        # (stock_price_res+1) * (first_dte+1) entries
+        strat_gains = [CustomDict(
+            {min_stock + i * stock_price_increment: 0 for i in range(stock_price_resolution+1)})
+            for _ in range(first_dte+1)]
+
+        for day in range(len(strat_gains)):  # iterate over days
+            for stock_price in list(strat_gains[day].keys()):
+
+                """
+                This is a for-version of below list comprehension
+                
+                leg_gains = 0
+                for leg in legs:
+                    future_leg_price = EuroOption(stock_price,
+                          leg.asset.strike,
+                          risk_free_rate,
+                          len(strat_gains) - day,  # dte then
+
+                          binomial_iterations,
+                          {'is_call': leg.asset.opt_type == "c",
+                           'eu_option': False,
+                           'sigma': leg.asset.iv}).price()
+                    leg_gain = future_leg_price - leg.cost
+                    if leg.cost < 0:  # short leg
+                        leg_gain = -leg_gain
+
+                    leg_gains += leg_gain
+                leg_gains += (stock_price - current_stock_price) * stock_quantity
+                """
+
+                # all leg gains + stock gains at that day with that stock price
+                strat_gains[day][stock_price] += sum([(
+                    EuroOption(stock_price,
+                          leg.asset.strike,
+                          risk_free_rate,
+                          len(strat_gains) - day,  # dte then
+
+                          binomial_iterations,
+                          {'is_call': leg.asset.opt_type == "c",
+                           'eu_option': False,
+                           'sigma': leg.asset.iv}).price()
+                     - leg.cost) * (1 if leg.cost > 0 else -1)
+                     for leg in legs]) + (stock_price - current_stock_price) * stock_quantity
+
+        # now we track the paths of mc simulations along strat_gains
+
+        done_iterations = set()
+        tp_hit_days = []
+        sl_hit_days = []
+        for d in range(1, first_dte):  # iterate over days, start from tomorrow bc todays sim prices are all equal
+
+            # only go while there are uncertain iterations left (tp hit / sl hit?)
+            if len(tp_hit_days)+len(sl_hit_days) >= iterations:
+                break
+
+            for i, sim_stock_price in enumerate(simulated_stock_prices.iloc[d, :]):  # iterate over iterations
+
+                # result of this iteration is already clear
+                if i in done_iterations:
+                    continue
+
+                gain = strat_gains[d][sim_stock_price]
+                if gain >= tp:
+                    done_iterations.add(i)
+                    tp_hit_days.append(d)
+                    continue
+                if gain <= sl:
+                    done_iterations.add(i)
+                    sl_hit_days.append(d)
+                    continue
+
+        return len(tp_hit_days) / iterations, len(sl_hit_days) / iterations
+
+    @timeit
+    def get_p50(self, comb_pos, risk_free_rate) -> float:
+        """
+
+                :param comb_pos:
+                :param risk_free_rate:
+                :return:
+                """
+
+        from Option_strategy_selector import Option
+
+        # ################################################################################################# #
+        # constants
+
+        binomial_iterations = 5  # good tradeoff between accuracy and time
+        stock_price_resolution = 60  # height of matrix
+
+        # ################################################################################################# #
+
+        first_dte = comb_pos.dte_until_first_exp()
+        legs = [pos for pos in comb_pos.pos_dict.values() if type(pos) is Option]
+        ticker = comb_pos.underlying
+        # iv_percentile = option_strat.env_container.env.ivp
+        current_stock_price = comb_pos.u_ask
+        stock_quantity = comb_pos.stock.quantity
+
+        tp = 0.5 * comb_pos.max_profit
+
+        simulated_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[:first_dte, 1:]
+        iterations = len(simulated_stock_prices.iloc[0, :])
+
+        # option 1: use min & max from monte sim_stock_prices
+        min_stock, max_stock = min(simulated_stock_prices), max(simulated_stock_prices)
+
+        # option 2: use iv percentile adjusted to dte and compute outliers separately
+        """
+        deviation = first_dte / 365.0 * iv_percentile * current_stock_price
+        min_stock = current_stock_price - deviation
+        max_stock = min(current_stock_price + deviation, 0.01)
+        #"""
+
+        stock_price_increment = (max_stock - min_stock) / stock_price_resolution
+
+        # (stock_price_res+1) * (first_dte+1) entries
+        strat_gains = [CustomDict(
+            {min_stock + i * stock_price_increment: 0 for i in range(stock_price_resolution + 1)})
+            for _ in range(first_dte + 1)]
+
+        for day in range(len(strat_gains)):  # iterate over days
+            for stock_price in list(strat_gains[day].keys()):
+                """
+                This is a for-version of below list comprehension
+
+                leg_gains = 0
+                for leg in legs:
+                    future_leg_price = EuroOption(stock_price,
+                          leg.asset.strike,
+                          risk_free_rate,
+                          len(strat_gains) - day,  # dte then
+
+                          binomial_iterations,
+                          {'is_call': leg.asset.opt_type == "c",
+                           'eu_option': False,
+                           'sigma': leg.asset.iv}).price()
+                    leg_gain = future_leg_price - leg.cost
+                    if leg.cost < 0:  # short leg
+                        leg_gain = -leg_gain
+
+                    leg_gains += leg_gain
+                leg_gains += (stock_price - current_stock_price) * stock_quantity
+                """
+
+                # all leg gains + stock gains at that day with that stock price
+                strat_gains[day][stock_price] += sum([(
+                                                              EuroOption(stock_price,
+                                                                         leg.asset.strike,
+                                                                         risk_free_rate,
+                                                                         len(strat_gains) - day,  # dte then
+
+                                                                         binomial_iterations,
+                                                                         {'is_call': leg.asset.opt_type == "c",
+                                                                          'eu_option': False,
+                                                                          'sigma': leg.asset.iv}).price()
+                                                              - leg.cost) * (1 if leg.cost > 0 else -1)
+                                                      for leg in legs]) \
+                                                 + (stock_price - current_stock_price) * stock_quantity
+
+        # now we track the paths of mc simulations along strat_gains
+
+        done_iterations = set()
+        tp_hit_days = []
+        for d in range(1, first_dte):  # iterate over days, start from tomorrow bc todays sim prices are all equal
+
+            # only go while there are uncertain iterations left (tp hit / sl hit?)
+            if len(tp_hit_days) >= iterations:
+                break
+
+            for i, sim_stock_price in enumerate(simulated_stock_prices.iloc[d, :]):  # iterate over iterations
+
+                # result of this iteration is already clear
+                if i in done_iterations:
+                    continue
+
+                gain = strat_gains[d][sim_stock_price]
+                if gain >= tp:
+                    done_iterations.add(i)
+                    tp_hit_days.append(d)
+                    continue
+
+        return len(tp_hit_days) / iterations
+
+    @timeit
+    def get_pop_pn_sl(self, option_strat, risk_free_rate):
+
+        prob_of_prof = self.get_pop(option_strat.env_container.ticker,
+                                    option_strat.positions.dte_until_first_exp(),
+                                    option_strat.positions.break_even)
+        ptp, psl = self.get_pn_psl(option_strat, risk_free_rate)
+
+        return DDict({
+            "prob_of_profit": round(prob_of_prof, 5),
+            "p_tp": round(ptp, 5),
+            "p_sl": round(psl, 5)
+        })
+
 
 if __name__ == "main":
+    pd.set_option('display.float_format', lambda x: '%.8f' % x)
     mcs = MonteCarloSimulator(["abt"])
     # print(mcs.p_greater_n_end("expr", 4))
-    print(mcs.get_pop_pn_sl("abt", opt_price=0.30, delta=-0.29, gamma=0.23, theta=-0.00578,
-                            tp=0.15, sl=-0.10, days=44))
+    print(mcs.get_pop_pn_sl_old("abt", opt_price=0.30, delta=-0.29, gamma=0.23, theta=-0.00578,
+                                tp=0.15, sl=-0.10, days=44))
 

@@ -20,6 +20,7 @@ from yahoo_fin import stock_info as si
 from DDict import DDict
 from MonteCarlo import MonteCarloSimulator
 from time import time
+import pathlib
 
 """
 import ipdb
@@ -28,7 +29,7 @@ ipdb.set_trace()
 
 pritn = print
 
-online = True  # all are acn
+online = False  # all are acn
 force_chain_download = True and online
 force_meta_download = True and online
 
@@ -77,6 +78,9 @@ plt.rc('grid', color="#121212")
 # </editor-fold>
 
 # <editor-fold desc="Libor">
+
+# todo replace with aribor
+
 def get_libor_rates():
     libor_url = "https://www.finanzen.net/zinsen/libor/usd"
 
@@ -148,13 +152,15 @@ def get_options_meta_data(symbol):
         soup = BeautifulSoup(resp_text, 'html.parser')
         text = soup.find_all(text=True)
 
-        ivr, vol30, oi30 = 0, 0, 0
+        ivr, ivp, vol30, oi30 = 0, 0, 0, 0
         next_earnings = ""
 
         for i, t in enumerate(text):
             try:
                 if 'IV Rank' in t and "%" in text[i + 2]:
                     ivr = float(text[i + 2].replace("%", ""))
+                if 'IV Percentile' in t and "%" in text[i + 2]:
+                    ivp = float(text[i + 2].replace("%", ""))/100.0
                 if 'Volume Avg (30-Day)' in t and vol30 == 0:  # option volume
                     vol30 = int(text[i + 2].replace(",", ""))
                 if 'Open Int (30-Day)' in t and oi30 == 0:
@@ -169,7 +175,7 @@ def get_options_meta_data(symbol):
             except Exception as e:
                 _warn(f'Getting next earnigns date failed for ticker {symbol} with exception: {e}')
 
-        return ivr, vol30, oi30, next_earnings
+        return ivr, ivp, vol30, oi30, next_earnings
 
 
 def get_rsi20(symbol):
@@ -375,7 +381,7 @@ def get_option_chain(yf_obj, u_ask, save=True, min_vol=0):
 # <editor-fold desc="Meta data routine">
 class MetaData:
 
-    def __init__(self, ticker, u_price, bid, ask, option_chain, ivr, sector, vol30, oi30, next_earnings,
+    def __init__(self, ticker, u_price, bid, ask, option_chain, ivr, ivp, sector, vol30, oi30, next_earnings,
                  rsi20, short_outlook, mid_outlook, long_outlook, analyst_rating, yf_obj: yf.Ticker = None):
         self.mid_outlook = mid_outlook
         self.ticker = ticker
@@ -384,6 +390,7 @@ class MetaData:
         self.u_ask = ask
         self.option_chain = option_chain
         self.ivr = ivr
+        self.ivp = ivp
         self.sector = sector
         self.vol30 = vol30
         self.oi30 = oi30
@@ -406,7 +413,7 @@ class MetaData:
             with open("meta/" + filename + ".pickle", "wb") as file:
                 pickle.dump(self, file)
 
-            print("File created successfully!")
+            print("File created successfully!\n")
 
         except Exception as e:
             print("While creating the file", filename, "an exception occurred:", e)
@@ -421,11 +428,12 @@ class MetaData:
 
 
 def get_meta_data(ticker, min_single_opt_vol=0) -> Optional[MetaData]:
-    file_exists = os.path.isfile("C:\\Users\\User\\PycharmProjects\\Finance\\Options\\meta\\" + ticker + "_meta.pickle")
+    current_path = pathlib.Path().absolute().as_posix()
+    file_exists = os.path.isfile(current_path + '\\meta\\' + ticker + "_meta.pickle")
 
     if not online:
         if file_exists:  # offline, file exists, read from it
-            return MetaData.from_file(ticker + "_meta")
+            return MetaData.from_file("meta/" + ticker + "_meta.pickle")
         else:  # offline and no file
             _warn(f'No meta data available for ticker {ticker} (offline and no file around)')
             return None
@@ -451,7 +459,7 @@ def download_meta_data(ticker, min_single_opt_vol=0) -> Optional[MetaData]:
     # do this before requesting option chain beacause we need a underlying price for this
 
     u_price, u_bid, u_ask, sector = get_price_sector_yf(ticker, yf_obj)  # yahoo
-    ivr, vol30, oi30, next_earnings = get_options_meta_data(ticker)  # barchart
+    ivr, ivp, vol30, oi30, next_earnings = get_options_meta_data(ticker)  # barchart
 
     if u_price == 0:
 
@@ -480,7 +488,7 @@ def download_meta_data(ticker, min_single_opt_vol=0) -> Optional[MetaData]:
     # request to barchart.com
     short_outlook, mid_outlook, long_outlook, analyst_rating = get_underlying_outlook(ticker)
 
-    return MetaData(ticker, u_price, u_bid, u_ask, option_chain, ivr, sector, vol30, oi30, next_earnings, rsi20,
+    return MetaData(ticker, u_price, u_bid, u_ask, option_chain, ivr, ivp, sector, vol30, oi30, next_earnings, rsi20,
                     short_outlook, mid_outlook, long_outlook, analyst_rating, yf_obj=yf_obj)
 
 
@@ -689,8 +697,9 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
 
     # -----------------------------------------------------------------------------------------------------------------
 
-    env = {
+    env = DDict({
         "IV": meta.ivr,
+        "ivp": meta.ivp,
         "IV outlook": 0,
 
         "RSI20d": meta.rsi20,
@@ -700,7 +709,7 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
         "long term outlook": meta.long_outlook,
 
         "analyst rating": meta.analyst_rating
-    }
+    })
 
     env_con = EnvContainer(env, monte_carlo, meta.option_chain, meta.u_bid, meta.u_ask, ticker,
                            strat_cons.min_sinle_opt_vol)
@@ -1903,7 +1912,7 @@ class OptionChain:
             with open("chains/" + filename + ".pickle", "wb") as file:
                 pickle.dump(self, file)
 
-            print("File created successfully!")
+            print("File created successfully!\n")
 
         except Exception as e:
             print("While creating the file", filename, "an exception occurred:", e)
@@ -1954,7 +1963,7 @@ class CombinedPosition:
         self.cost = -1
         self.risk = -1
         self.bpr = -1
-        self.break_even = -1
+        self.break_even = -1  # todo multiple break evens possible!
         self.max_profit = -1
         self.rom = -1
 
@@ -2092,9 +2101,11 @@ class CombinedPosition:
         :param sl:
         :return:
         """
+        return
+
         if not tp:
             tp = self.max_profit / 2
-
+        """
         prob_dict = self.mcs.get_pop_pn_sl(self.underlying,
                                            self.cost - self.stock.cost,
 
@@ -2105,6 +2116,8 @@ class CombinedPosition:
                                            self.dte_until_first_exp(),
                                            tp,
                                            stock_quantity=self.stock.quantity)
+        """
+        prob_dict = self.mcs.get_pop_pn_sl()
         self.prob_of_profit = prob_dict.prob_of_profit
         self.p50 = prob_dict.p_tp
 
@@ -2703,8 +2716,9 @@ class OptionStrategy:
         self.sl_percentage = sl_perc
         self.recommendation_threshold = threshold
 
-        self.p50 = -1
-        self.pop = -1
+        self.ptp = -1
+        self.psl = -1
+        self.prob_of_profit = -1
 
         self.get_positions(self.env_container)
 
@@ -2725,11 +2739,11 @@ class OptionStrategy:
             h += f'{indent}           {hint}\n'
 
         return f'\n' \
-               f'{indent}{"-" * 300}' \
+               f'{indent}{"-" * 120}' \
                f'\n' \
                f'{indent}{self.name} for {self.positions.underlying} ({(self.recommendation * 100):+3.2f}%):' \
                f'\n' \
-               f'{indent}{"-" * 300}' \
+               f'{indent}{"-" * 120}' \
                f'{indent}{self.positions.repr(t=t + 1)}' \
                f'{indent}Greek exposure:' \
                f'\n' \
@@ -2744,19 +2758,16 @@ class OptionStrategy:
                f'{indent}\tρ = {self.greek_exposure["rho"]}' \
                f'\n' \
                f'\n' \
-               f'{indent}      Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} DTE)' \
+               f'{indent}    Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} DTE)' \
                f'\n' \
-               f'{indent}\n           P50: {self.p50 * 100:.2f} %' \
+               f'{indent}\n          PoP: {self.prob_of_profit * 100:.2f} %' \
                f'\n' \
-               f'{indent}P50 Expectance: {self.p50 * self.positions.max_profit * 0.5:.2f} $' \
+               f'{indent}\n          PTP: {self.ptp * 100:.2f} %' \
                f'\n' \
-               f'{indent}\n           PoP: {self.prob_of_profit * 100:.2f} %' \
+               f'{indent}\n    Stop loss: {self.sl_percentage / 100 * self.positions.risk:.2f} $' \
                f'\n' \
-               f'{indent}    Expectance: {self.prob_of_profit * self.positions.max_profit:.2f} $' \
                f'\n' \
-               f'{indent}\n     Stop loss: {self.sl_percentage / 100 * self.positions.risk:.2f} $' \
-               f'\n' \
-               f'{indent}         Hints: {h}'
+               f'{indent}        Hints: {h}'
 
     def repr(self, t=0):
 
@@ -2857,7 +2868,9 @@ class OptionStrategy:
 
             self._set_greek_exposure()
             self._set_close_date()
-            self._set_probs_in_com_pos()
+            # self._set_probs_in_com_pos()
+            self._set_probs()
+
         else:
             _debug(f'\nThreshold of {self.recommendation_threshold} for {self.name} was not reached: '
                    f'{self.recommendation:+.5f} < {self.recommendation_threshold}\n')
@@ -2883,6 +2896,13 @@ class OptionStrategy:
 
         self.p50 = self.positions.p50
         self.prob_of_profit = self.positions.prob_of_profit
+
+    def _set_probs(self):
+        prob_dict = self.positions.mcs.get_pop_pn_sl(self,
+                                                     get_risk_free_rate(self.positions.dte_until_first_exp()))
+        self.ptp = prob_dict.p_tp
+        self.prob_of_profit = prob_dict.prob_of_profit
+        self.psl = prob_dict.p_sl
 
     def _check_liquidity(self):
         return self._check_spread() and self._check_vol()
@@ -3403,19 +3423,6 @@ def get_market_recommendations(start_from=None):
             continue
 
 
-# get_market_recommendations()  # got to mco
-
-"""
-propose_strategies("afl",
-                   StrategyConstraints(strict_mode=False,
-                                       min_oi30=100,
-                                       min_vol30=1000,
-                                       min_sinle_opt_vol=100),
-                   MonteCarloSimulator(tickers=["afl"]),
-                   auto=True, )
-#"""
-
-
 # AAPL
 # theta for long call is huge, is this correct?
 # pop & p50 for long call are 0, y?
@@ -3472,4 +3479,20 @@ def model_test():
     print(f'Bjerksund-Strensland took {time() - start2:.8f} seconds: {opt_price}')
 
 
-get_market_recommendations()
+if __name__ == "__main__":
+
+    # todo check if iv & ivp are 0, alert if so
+    # todo add timestamp to strat summary prints ---timestamp---------------
+    # todo add env rating to strat sum prints
+
+    # """
+    propose_strategies("afl",
+                       StrategyConstraints(strict_mode=False,
+                                           min_oi30=100,
+                                           min_vol30=1000,
+                                           min_sinle_opt_vol=100),
+                       MonteCarloSimulator(tickers=["afl"]),
+                       auto=True, )
+    # """
+
+    # get_market_recommendations()
