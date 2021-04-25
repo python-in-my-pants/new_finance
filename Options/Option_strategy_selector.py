@@ -29,7 +29,7 @@ ipdb.set_trace()
 
 pritn = print
 
-online = False  # all are acn
+online = True
 force_chain_download = True and online
 force_meta_download = True and online
 
@@ -3484,15 +3484,19 @@ if __name__ == "__main__":
     # todo check if iv & ivp are 0, alert if so
     # todo add timestamp to strat summary prints ---timestamp---------------
     # todo add env rating to strat sum prints
+    # todo timeit accuracy
+    # todo print warnings to strat sum
+    # todo credit spreads cost debit? why? see amc in file
+    # todo print underlying price in strat sum
 
-    # """
-    propose_strategies("afl",
+    #"""
+    propose_strategies("amc",
                        StrategyConstraints(strict_mode=False,
                                            min_oi30=100,
                                            min_vol30=1000,
                                            min_sinle_opt_vol=100),
-                       MonteCarloSimulator(tickers=["afl"]),
+                       MonteCarloSimulator(tickers=["amc"]),
                        auto=True, )
-    # """
+    #"""
 
     # get_market_recommendations()

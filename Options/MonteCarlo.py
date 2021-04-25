@@ -215,6 +215,7 @@ class MonteCarloSimulator(object):
         end_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[days-1, 1:]
         return len(end_stock_prices[end_stock_prices > break_even]) / len(end_stock_prices)
 
+    '''
     # todo sanity check, does this make sense at all?
     # todo test for naked puts, covered calls
     @timeit
@@ -336,11 +337,12 @@ class MonteCarloSimulator(object):
             "p_tp": round(tp_hit / _iterations, 5),
             "p_sl": round(sl_hit / _iterations, 5),
         })
+    '''
 
     @timeit
     def get_pn_psl(self, option_strat, risk_free_rate) -> [float, float]:
         """
-
+        TODO use bid/ask dependent on long/short leg, so the spread is incorporated into the calc
         :param option_strat:
         :param risk_free_rate:
         :return:
@@ -368,7 +370,7 @@ class MonteCarloSimulator(object):
         simulated_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[:first_dte, 1:]
         iterations = len(simulated_stock_prices.iloc[0, :])
 
-        if iv_percentile > 0.01:
+        if iv_percentile > 1:
             # option 2: use iv percentile adjusted to dte and compute outliers separately
             deviation = first_dte/365.0 * iv_percentile * current_stock_price
             min_stock = max(option_strat.env_container.u_ask - deviation, 0.01)
@@ -442,7 +444,22 @@ class MonteCarloSimulator(object):
                 if i in done_iterations:
                     continue
 
-                gain = strat_gains[d][sim_stock_price]
+                try:
+                    gain = strat_gains[d][sim_stock_price]
+                except KeyError:
+                    # calc missing value manually
+                    gain = sum([(EuroOption(sim_stock_price,
+                                            leg.asset.strike,
+                                            risk_free_rate,
+                                            len(strat_gains) - d,  # dte then
+
+                                            binomial_iterations,
+                                            {'is_call': leg.asset.opt_type == "c",
+                                             'eu_option': False,
+                                             'sigma': leg.asset.iv}).price()
+                     - leg.cost) * (1 if leg.cost > 0 else -1)
+                     for leg in legs]) + (sim_stock_price - current_stock_price) * stock_quantity
+
                 if gain >= tp:
                     done_iterations.add(i)
                     tp_hit_days.append(d)
@@ -454,6 +471,7 @@ class MonteCarloSimulator(object):
 
         return len(tp_hit_days) / iterations, len(sl_hit_days) / iterations
 
+    '''
     @timeit
     def get_p50(self, comb_pos, risk_free_rate) -> float:
         """
@@ -564,6 +582,7 @@ class MonteCarloSimulator(object):
                     continue
 
         return len(tp_hit_days) / iterations
+    '''
 
     @timeit
     def get_pop_pn_sl(self, option_strat, risk_free_rate):
