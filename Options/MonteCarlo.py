@@ -23,7 +23,7 @@ class MonteCarloSimulator(object):
     ticker, days, iterations -> pop, p_n, p_sl
     """
 
-    def __init__(self, tickers: list, days: int = 1000, iterations: int = 1000):
+    def __init__(self, tickers: list, days: int = 1000, iterations: int = 10000):
 
         tickers.append("msft")
         self.tickers = [t.upper() for t in tickers]
@@ -208,12 +208,20 @@ class MonteCarloSimulator(object):
         return len(over) / (len(over) + len(less))
 
     @timeit
-    def get_pop(self, ticker, days, break_even):
+    def get_pop(self, ticker, days, break_even, price_dir):
         # return self.p_greater_n_end(ticker, 0)
 
         # todo days-1 or days?
         end_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[days-1, 1:]
-        return len(end_stock_prices[end_stock_prices > break_even]) / len(end_stock_prices)
+        if price_dir > 0:  # directional long
+            return len(end_stock_prices[end_stock_prices > break_even]) / len(end_stock_prices)
+        if price_dir < 0:  # directional short
+            return len(end_stock_prices[end_stock_prices < break_even]) / len(end_stock_prices)
+        else:
+            ...
+            # todo butterflies & condors & such
+            return -1
+
 
     '''
     # todo sanity check, does this make sense at all?
@@ -589,7 +597,8 @@ class MonteCarloSimulator(object):
 
         prob_of_prof = self.get_pop(option_strat.env_container.ticker,
                                     option_strat.positions.dte_until_first_exp(),
-                                    option_strat.positions.break_even)
+                                    option_strat.positions.break_even,
+                                    option_strat.positions.greeks["delta"])
         ptp, psl = self.get_pn_psl(option_strat, risk_free_rate)
 
         return DDict({

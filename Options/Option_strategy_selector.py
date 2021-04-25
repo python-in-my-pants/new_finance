@@ -29,7 +29,7 @@ ipdb.set_trace()
 
 pritn = print
 
-online = True
+online = False
 force_chain_download = True and online
 force_meta_download = True and online
 
@@ -2758,7 +2758,7 @@ class OptionStrategy:
                f'{indent}\tρ = {self.greek_exposure["rho"]}' \
                f'\n' \
                f'\n' \
-               f'{indent}    Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} DTE)' \
+               f'{indent}     Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} DTE)' \
                f'\n' \
                f'{indent}\n          PoP: {self.prob_of_profit * 100:.2f} %' \
                f'\n' \
@@ -3488,6 +3488,9 @@ if __name__ == "__main__":
     # todo print warnings to strat sum
     # todo credit spreads cost debit? why? see amc in file
     # todo print underlying price in strat sum
+    # todo pop must be > < dependent on delta? or sth
+    # todo collect 1/3 of width of spreads as tasty variation
+    # todo add todays pl graph to non-auto
 
     #"""
     propose_strategies("amc",
@@ -3496,7 +3499,7 @@ if __name__ == "__main__":
                                            min_vol30=1000,
                                            min_sinle_opt_vol=100),
                        MonteCarloSimulator(tickers=["amc"]),
-                       auto=True, )
+                       auto=False, )
     #"""
 
     # get_market_recommendations()
