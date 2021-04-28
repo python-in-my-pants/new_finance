@@ -3,6 +3,9 @@ from numpy import median
 import sys
 
 
+
+
+
 def interactive():
 
     print("Interactive mode on! Type 'exit' to return to normal mode.")
