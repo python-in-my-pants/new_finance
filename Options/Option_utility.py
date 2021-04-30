@@ -134,7 +134,7 @@ def str_to_date(expiration: str):
 
 
 def date_to_european_str(d: str):
-    return datetime.strptime(d, "%Y-%m-%d").strftime("%m.%d.%Y")
+    return datetime.strptime(d, "%Y-%m-%d").strftime("%d.%m.%Y")
 
 
 def datetime_to_european_str(d: datetime):

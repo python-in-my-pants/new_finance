@@ -6,7 +6,7 @@ from DDict import DDict
 class Option:
 
     def __init__(self, name, opt_type, expiration, strike, bid, ask, vol,
-                 delta, gamma, theta, vega, rho, iv):
+                 delta, gamma, theta, vega, rho, iv, oi):
 
         """
         :param opt_type:
@@ -36,6 +36,7 @@ class Option:
         self.greeks = DDict({"delta": delta, "gamma": gamma, "theta": theta, "vega": vega, "rho": rho})
 
         self.iv = iv
+        self.oi = oi
 
     def parse_option(self, opt_string):
 
@@ -60,7 +61,7 @@ class Option:
         self.bid = self.ask
 
     def __str__(self):
-        return f'{date_to_opt_format(self.expiration)} {self.opt_type.upper()} {self.strike} @ {self.bid}/{self.ask}'
+        return f'{date_to_opt_format(self.expiration)} {self.opt_type.upper()} {self.strike} @ {self.bid: >3.2f}/{self.ask: >3.2f}'
 
     @staticmethod
     def from_row(row):
@@ -79,7 +80,8 @@ class Option:
         rho = row["rho"] if row["direction"] == "long" else -row["rho"]
 
         iv = row["IV"]
-        return Option(name, opt_type, expiration, strike, bid, ask, vol, delta, gamma, theta, vega, rho, iv)
+        oi = row["OI"]
+        return Option(name, opt_type, expiration, strike, bid, ask, vol, delta, gamma, theta, vega, rho, iv, oi)
 
     @staticmethod
     def from_df(df: pd.DataFrame):

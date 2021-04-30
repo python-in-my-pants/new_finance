@@ -11,7 +11,7 @@ import pickle
 from copy import deepcopy
 from eu_option import EuroOption
 from matplotlib import pyplot as plt
-from typing import Optional, Callable
+from typing import Optional, Callable, List, Dict, Union, Any, Tuple, Iterable
 from yahoo_fin import stock_info as si
 from DDict import DDict
 from MonteCarlo import MonteCarloSimulator
@@ -19,6 +19,7 @@ from time import time
 import pathlib
 from Option import Option
 from Option_utility import *
+from pprint import pprint as pp, pformat as pf
 
 """
 import ipdb
@@ -27,19 +28,23 @@ ipdb.set_trace()
 
 pritn = print
 
-online = True
+online = False
 force_chain_download = True and online
 force_meta_download = True and online
 
 debug = True
+debug_level = 1
 
 ACCOUNT_BALANCE = 1471
 DEFAULT_THRESHOLD = 0.3
 
+np.seterr(all='raise')
+
 
 # <editor-fold desc="Miscellaneous">
-def _warn(msg):
-    warnings.warn("\n\n\t" + msg + "\n", stacklevel=3)
+
+def _warn(msg, level=3):
+    warnings.warn("\n\n\t" + msg + "\n", stacklevel=level)
 
 
 if not online:
@@ -47,9 +52,16 @@ if not online:
 
 
 def _debug(*args):
-    if debug:
+    # higher level = more detail
+    l = args[-1]
+    if type(l) == int:
+        level = l
+    else:
+        # if no level is given, assume importance
+        level = 1
+    if debug and level <= debug_level:
         print()
-        print(*args)
+        print(*args[:-1])
 
 
 class RiskWarning(Warning):
@@ -334,7 +346,7 @@ def get_option_chain(yf_obj, u_ask, save=True, min_vol=0):
                 contracts.loc[index, "gearing"] = float('inf')
 
             contracts.loc[index, "P(ITM)"] = delta_to_itm_prob(delta, contract_type)
-            contracts.loc[index, "P(OTM)"] = 100-contracts.loc[index, "P(ITM)"]
+            contracts.loc[index, "P(OTM)"] = 100 - contracts.loc[index, "P(ITM)"]
 
     for expiration in expirations:
         exp_string = expiration.strftime("%Y-%m-%d")
@@ -497,7 +509,8 @@ def download_meta_data(ticker, min_single_opt_vol=0) -> Optional[MetaData]:
     # request to barchart.com
     short_outlook, mid_outlook, long_outlook, analyst_rating = get_underlying_outlook(ticker)
 
-    return MetaData(ticker, u_price, u_bid, u_ask, option_chain, ivr, imp_vol, sector, vol30, oi30, next_earnings, rsi20,
+    return MetaData(ticker, u_price, u_bid, u_ask, option_chain, ivr, imp_vol, sector, vol30, oi30, next_earnings,
+                    rsi20,
                     short_outlook, mid_outlook, long_outlook, analyst_rating, yf_obj=yf_obj)
 
 
@@ -533,7 +546,9 @@ class StrategyConstraints:
 
 
 def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
-                       monte_carlo: MonteCarloSimulator, auto: bool = False):
+                       monte_carlo: MonteCarloSimulator, auto: bool = False, use_predefined_strats: bool = True,
+                       single_strat_cons: Dict[str, Tuple[str, Any]] = None,
+                       filters: List[List[Union[Callable, float]]] = None):
     # todo get short term price outlook (technical analysis, resistances from barchart.com etc)
 
     # todo supply custom environment (like outlooks)
@@ -704,9 +719,9 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
     # </editor-fold>
 
     print()
-    print("-"*120)
+    print("-" * 120)
     print("All mandatory checks done! Starting strategy selection ...")
-    print("-"*120)
+    print("-" * 120)
 
     # -----------------------------------------------------------------------------------------------------------------
 
@@ -736,26 +751,35 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
     env_con = EnvContainer(env, monte_carlo, meta.option_chain, meta.u_bid, meta.u_ask, ticker,
                            strat_cons.min_sinle_opt_vol)
 
-    proposed_strategies = [
+    if use_predefined_strats:
+        proposed_strategies = [
 
-        LongCall(env_con),
-        LongPut(env_con),
+            LongCall(env_con),
+            LongPut(env_con),
 
-        CoveredCall(env_con),
+            CoveredCall(env_con),
 
-        VerticalDebitSpread(env_con, opt_type="c"),
-        VerticalCreditSpread(env_con, opt_type="c"),
+            VerticalDebitSpread(env_con, opt_type="c"),
+            VerticalCreditSpread(env_con, opt_type="c"),
 
-        VerticalDebitSpread(env_con, opt_type="p"),
-        VerticalCreditSpread(env_con, opt_type="p"),
-    ]
+            VerticalDebitSpread(env_con, opt_type="p"),
+            VerticalCreditSpread(env_con, opt_type="p"),
+        ]
+    else:
+        proposed_strategies = CustomStratGenerator.get_strats(chain=meta.option_chain,
+                                                              env=env_con,
+                                                              target_param_dict=single_strat_cons,
+                                                              strat_type="vertical spread",
+                                                              filters=filters)
 
-    for pos in proposed_strategies:
-        if pos.positions:
-            if auto:
-                with io.open("Strategy summary.txt", "a", encoding="utf-8") as myfile:
+    if auto:
+        with io.open("Strategy summary.txt", "a", encoding="utf-8") as myfile:
+            for pos in proposed_strategies:
+                if pos.positions:
                     myfile.write(str(pos))
-            else:
+    else:
+        for pos in proposed_strategies:
+            if pos.positions:
                 print(pos)
                 pos.positions.plot_profit_dist_on_first_exp()
 
@@ -773,7 +797,7 @@ class Stock:
         self.risk = self.get_risk()
 
     def __str__(self):
-        return f'{self.name}'  # @ {self.bid}/{self.ask}'
+        return f'{self.name} @ {self.bid}/{self.ask}'
 
     def get_risk(self):
         return self.bid
@@ -808,7 +832,10 @@ class Position:
 
     def short(self, t=0):
         indent = "\t" * t
-        return f'{indent}{self.quantity:+d} {self.asset} = {self.cost:.2f} $'
+        voloi = ""
+        if type(self.asset) is Option:
+            voloi = f'(OI: {int(self.asset.oi):>8d},  Vol: {int(self.asset.vol):>8d})'
+        return f'{indent}{self.quantity:+d} {self.asset} = {self.cost:+.2f} $\t\t{voloi}'
 
     def repr(self, t=0):
         indent = "\t" * t
@@ -1178,11 +1205,9 @@ class OptionChain:
                 self.expirations = []
                 self.ticker = None
 
-            """
-            _debug(("-" * 73) + "Chain after filtering" + ("-" * 73))
-            _debug("Expirations:", self.expirations, "\nLength:", len(self.options))
-            _debug(self.options.head(100))
-            #"""
+            _debug(("-" * 73) + "Chain after filtering" + ("-" * 73), 3)
+            _debug("Expirations:", self.expirations, "\nLength:", len(self.options), 3)
+            _debug(self.options.head(100), 3)
 
         elif chain_dict is not None:  # create from yahoo data frame
             self.expirations = \
@@ -1260,7 +1285,7 @@ class OptionChain:
     # <editor-fold desc="Type">
 
     def puts(self):
-        _debug("Filter for puts")
+        _debug("Filter for puts", 2)
         if self.options.empty:
             return self
         f = self.options.loc[self.options['contract'] == "p"]
@@ -1269,7 +1294,7 @@ class OptionChain:
         return OptionChain(f)
 
     def calls(self):
-        _debug("Filter for calls")
+        _debug("Filter for calls", 2)
         if self.options.empty:
             return self
         f = self.options.loc[self.options['contract'] == "c"]
@@ -1278,7 +1303,7 @@ class OptionChain:
         return OptionChain(f)
 
     def long(self):
-        _debug("Filter for longs")
+        _debug("Filter for longs", 2)
         if self.options.empty:
             return self
         f = self.options.loc[self.options['direction'] == "long"]
@@ -1287,7 +1312,7 @@ class OptionChain:
         return OptionChain(f)
 
     def short(self):
-        _debug("Filter for shorts")
+        _debug("Filter for shorts", 2)
         if self.options.empty:
             return self
         f = self.options.loc[self.options['direction'] == "short"]
@@ -1304,7 +1329,7 @@ class OptionChain:
         :param upper_dte:
         :return: all options expiring between (inclusive) lower_dte and upper_dte
         """
-        _debug(f'Filter for expiration in range {lower_dte}-{upper_dte} DTE')
+        _debug(f'Filter for expiration in range {lower_dte}-{upper_dte} DTE', 2)
         if self.options.empty:
             return self
         dates = pd.date_range(start=datetime.now() + timedelta(days=lower_dte),
@@ -1322,7 +1347,7 @@ class OptionChain:
         :param exp_date: date as string YYYY-MM-DD
         :return:
         """
-        _debug(f'Filter for expiration before {exp_date}')
+        _debug(f'Filter for expiration before {exp_date}', 2)
         if self.options.empty:
             return self
 
@@ -1337,10 +1362,10 @@ class OptionChain:
         :param exp_date: as string YYYY-MM-DD
         :return:
         """
-        _debug("Filter for exp date:", exp_date)
+        _debug("Filter for exp date:", exp_date, 2)
         if self.options.empty:
             return self
-        f = self.options.loc[[self.options['expiration'] == exp_date]]
+        f = self.options.loc[self.options['expiration'] == exp_date]
         if type(f) is pd.Series:
             f = f.to_frame().T
         return OptionChain(f)
@@ -1351,7 +1376,7 @@ class OptionChain:
         :param dte:
         :return:
         """
-        _debug("Filter for expiration close to", dte, "dte")
+        _debug("Filter for expiration close to", dte, "dte", 2)
         if self.options.empty:
             return self
         f = self.options.loc[self.options['expiration'] == get_closest_date(self.expirations, dte)]
@@ -1365,7 +1390,7 @@ class OptionChain:
         :param i:
         :return:
         """
-        _debug(f"Filter for {i}th expiration: ", self.expirations[i])
+        _debug(f"Filter for {i}th expiration: ", self.expirations[i], 2)
         if self.options.empty:
             return self
         f = self.options.loc[self.options['expiration'] == self.expirations[i]]
@@ -1378,7 +1403,7 @@ class OptionChain:
     # <editor-fold desc="Greeks">
 
     def greek(self, g, lower=0, upper=1):
-        _debug(f'Filter for {g} in range {lower}-{upper}')
+        _debug(f'Filter for {g} in range {lower}-{upper}', 2)
         if self.options.empty:
             return self
         f = self.options.loc[(lower <= self.options[g]) & (upper >= self.options[g])]
@@ -1387,7 +1412,7 @@ class OptionChain:
         return OptionChain(f)
 
     def greek_close_to(self, greek, d):
-        _debug(f'Filter for {greek} close to {d}')
+        _debug(f'Filter for {greek} close to {d}', 2)
         if self.options.empty:
             return self
         f = self.options.loc[abs_min_closest_index(self.options[greek].to_list(), d)]
@@ -1452,7 +1477,7 @@ class OptionChain:
             contract_type = contract_default  # contracts[0]
             prefiltered = self
 
-        _debug(f'Filter for {n} {moneyness} strike on {contract_type}')
+        _debug(f'Filter for {n} {moneyness} strike on {contract_type}', 2)
 
         if contract_type not in contracts:
             _debug(f'OptionChain does not contain any {"puts" if contract_type == "p" else "calls"}, returning empty '
@@ -1464,13 +1489,14 @@ class OptionChain:
         # atm_index = min_closest_index(list(prefiltered.options["delta"]), 0.5)
         atm_index = abs_min_closest_index(list(prefiltered.options["strike"]), u_ask)
 
-        _debug(f'Detected ATM strike at {prefiltered.options.loc[atm_index, "strike"]}')
+        _debug(f'Detected ATM strike at {prefiltered.options.loc[atm_index, "strike"]}', 2)
 
         f = None
         use_atm = 0
         # TODO set bounds
         strikes = prefiltered.options["strike"].values.tolist()
-        min_strike, max_strike = abs_min_closest_index(strikes, min(strikes)), abs_min_closest_index(strikes, max(strikes))
+        min_strike, max_strike = abs_min_closest_index(strikes, min(strikes)), abs_min_closest_index(strikes,
+                                                                                                     max(strikes))
 
         def cap(x):
             return min(max(min_strike, x), max_strike)
@@ -1514,7 +1540,7 @@ class OptionChain:
 
     # <editor-fold desc="ITM/OTM">
     def itm(self):
-        _debug("Filter for ITM")
+        _debug("Filter for ITM", 2)
         if self.options.empty:
             return self
         f = self.options.loc[self.options['inTheMoney'] is True]
@@ -1523,13 +1549,14 @@ class OptionChain:
         return OptionChain(f)
 
     def otm(self):
-        _debug("Filter for OTM")
+        _debug("Filter for OTM", 2)
         if self.options.empty:
             return self
         f = self.options.loc[self.options['inTheMoney'] == False]
         if type(f) is pd.Series:
             f = f.to_frame().T
         return OptionChain(f)
+
     # </editor-fold>
 
     # <editor-fold desc="IV">
@@ -1553,7 +1580,7 @@ class OptionChain:
 
     # <editor-fold desc="p(ITM)">
     def itm_prob_close_to(self, p):
-        _debug(f'Filter for P(ITM) close to {p}')
+        _debug(f'Filter for P(ITM) close to {p}', 2)
         if self.options.empty:
             return self
         f = self.options.loc[abs_min_closest_index(self.options["P(ITM)"].to_list(), p)]
@@ -1562,7 +1589,7 @@ class OptionChain:
         return OptionChain(f)
 
     def itm_prob_range(self, g, lower=0, upper=1):
-        _debug(f'Filter for {g} in range {lower}-{upper}')
+        _debug(f'Filter for {g} in range {lower}-{upper}', 2)
         if self.options.empty:
             return self
         f = self.options.loc[(lower <= self.options["P(ITM)"]) & (upper >= self.options["P(ITM)"])]
@@ -1574,7 +1601,7 @@ class OptionChain:
 
     # <editor-fold desc="Strike ><">
     def strike_higher_or_eq(self, n):
-        _debug("Filter for strike higher:", n)
+        _debug("Filter for strike higher:", n, 2)
         if self.options.empty:
             return self
         f = self.options.loc[self.options['strike'] >= n]
@@ -1583,13 +1610,23 @@ class OptionChain:
         return OptionChain(f)
 
     def strike_lower_or_eq(self, n):
-        _debug("Filter for strike lower:", n)
+        _debug("Filter for strike lower:", n, 2)
         if self.options.empty:
             return self
         f = self.options.loc[self.options['strike'] <= n]
         if type(f) is pd.Series:
             f = f.to_frame().T
         return OptionChain(f)
+
+    def strike_eq(self, n):
+        _debug("Filter for strike equal to:", n, 2)
+        if self.options.empty:
+            return self
+        f = self.options.loc[self.options['strike'] == n]
+        if type(f) is pd.Series:
+            f = f.to_frame().T
+        return OptionChain(f)
+
     # </editor-fold>
 
     def premium_to_strike_diff(self, ratio, other_leg_cost, other_leg_strike, direction):
@@ -1602,7 +1639,7 @@ class OptionChain:
         :return:
         """
         _debug(f"Filter for premium/strike ratio close to: {ratio:.2f} "
-               f"(other leg cost: {other_leg_cost}; other leg strike: {other_leg_strike})")
+               f"(other leg cost: {other_leg_cost}; other leg strike: {other_leg_strike})", 2)
         if self.options.empty:
             return self
 
@@ -1624,7 +1661,7 @@ class OptionChain:
 
     # <editor-fold desc="Liquidity">
     def volume(self, min_vol):
-        _debug(f"Filter for volume > {min_vol}")
+        _debug(f"Filter for volume > {min_vol}", 2)
         if self.options.empty:
             return self
         f = self.options.loc[self.options['volume'] > min_vol]
@@ -1633,13 +1670,14 @@ class OptionChain:
         return OptionChain(f)
 
     def open_interest(self, min_oi):
-        _debug(f"Filter for single option open interest > {min_oi}")
+        _debug(f"Filter for single option open interest > {min_oi}", 2)
         if self.options.empty:
             return self
         f = self.options.loc[self.options['OI'] > min_oi]
         if type(f) is pd.Series:
             f = f.to_frame().T
         return OptionChain(f)
+
     # </editor-fold>
 
     def non_zero_ask(self, internal=False):
@@ -1722,6 +1760,7 @@ class CombinedPosition:
         self.bpr = -1
         self.break_even = -1  # todo multiple break evens possible!
         self.max_profit = -1
+        self.max_profit_point = -1  # smallest underlying price at which max profit occurs todo mult possible (use enum and return list of indices)
         self.rom = -1
 
         self.p50 = -1  # prob of reaching 50 % of max rofit until first expiration
@@ -1760,10 +1799,14 @@ class CombinedPosition:
                          f'{indent}{"." * 300}' \
                          f'\n'
 
+        first_exp, dte = self.first_exp_and_dte()
+
         return f'\n\n' \
                f'{s}' \
                f'\n' \
-               f'{indent}   Cumulative strategy cost: {self.cost:.2f} $' \
+               f'{indent}   Cumulative strategy cost: {self.cost: >8.2f} $' \
+               f'\n' \
+               f'{indent}                 Expiration: {first_exp} ({dte} DTE)' \
                f'\n' \
                f'\n' \
                f'{indent}          Cumulative Greeks: ' \
@@ -1776,19 +1819,25 @@ class CombinedPosition:
                f'{indent}                Theta/Delta: {self.theta_to_delta:.2f}' \
                f'\n' \
                f'\n' \
-               f'{indent}                 Max profit: {self.max_profit:+6.2f} $' \
+               f'{indent}                 Max profit: {self.max_profit:>+6.2f} $' \
                f'\n' \
-               f'{indent}                   Max risk: {self.risk:+6.2f} $' \
+               f'{indent}                   Max risk: {-self.risk:>+6.2f} $' \
                f'\n' \
-               f'{indent}                        BPR: {self.bpr:6.2f} $' \
+               f'{indent}                        BPR: {-self.bpr:>+6.2f} $' \
                f'\n' \
                f'\n' \
                f'{indent}       Break even on expiry: {self.break_even:4.2f} $' \
                f'\n' \
-               f'{indent}         Implied 1 STD move: ±{self.expected_move:4.2f} $ ' \
-               f'({self.u_mid-self.expected_move / self.u_mid+self.expected_move})' \
+               f'{indent}     Implied 1 STD DEV move: ±{self.expected_move:4.2f} $ ' \
+               f'({max(self.u_mid - self.expected_move, 0):.2f} $/{self.u_mid + self.expected_move:.2f} $)' \
                f'\n' \
-               f'{indent}                Half profit: {self.max_profit/2:+6.2f} $' \
+               f'{indent}     Implied 2 STD DEV move: ±{2 * self.expected_move:4.2f} $ ' \
+               f'({max(self.u_mid - 2 * self.expected_move, 0):.2f} $/{self.u_mid + 2 * self.expected_move:.2f} $)' \
+               f'\n' \
+               f'{indent}     Implied 3 STD DEV move: ±{3 * self.expected_move:4.2f} $ ' \
+               f'({max(self.u_mid - 3 * self.expected_move, 0):.2f} $/{self.u_mid + 3 * self.expected_move:.2f} $)' \
+               f'\n' \
+               f'{indent}                Half profit: {self.max_profit / 2:+6.2f} $' \
                f'\n' \
                f'{indent}Return on margin (TP @ 50%): {self.rom * 100:.2f} %' \
                f'\n\n'
@@ -1848,7 +1897,7 @@ class CombinedPosition:
         self.risk = self.get_risk()
         self.bpr = self.get_bpr()
         self.break_even = self.get_break_even()
-        self.max_profit = self.get_max_profit()
+        self.max_profit, self.max_profit_point = self.get_max_profit()
         self.rom = self.get_rom()
 
         # pop ptp psl
@@ -1857,9 +1906,10 @@ class CombinedPosition:
         # split mcs between stock part and option part
 
     def set_expected_move(self, iv):
-        self.expected_move = iv * self.u_mid * self.dte_until_first_exp()/365.0
+        # TODO make dte a float with day ending at market close
+        self.expected_move = iv * self.u_mid * (self.dte_until_first_exp()+1) / 365.0
 
-    def set_probs(self, tp=None, sl=None):
+    '''def set_probs(self, tp=None, sl=None):
         """
         not regularyly used in combined position, provides functinality for option strat
         probs will be zero when printing unless this method is called beforehand
@@ -1885,10 +1935,16 @@ class CombinedPosition:
         """
         prob_dict = self.mcs.get_pop_pn_sl()
         self.prob_of_profit = prob_dict.prob_of_profit
-        self.p50 = prob_dict.p_tp
+        self.p50 = prob_dict.p_tp'''
 
     def dte_until_first_exp(self):
         return date_str_to_dte(min([p.asset.expiration for p in self.pos_dict.values() if type(p.asset) is Option]))
+
+    def first_exp_and_dte(self):
+        min_exp = min([p.asset.expiration for p in self.pos_dict.values() if type(p.asset) is Option])
+        first_exp = date_to_european_str(min_exp)
+        dte = date_str_to_dte(min_exp)
+        return first_exp, dte
 
     def cover_short_with(self, short_pos_name: str, long_pos_name: str, covering_long_q):
         if short_pos_name in self.coverage_dict.keys():
@@ -2273,7 +2329,9 @@ class CombinedPosition:
         return self.get_max_profit_on_first_exp()  # todo put this together with the other call to this method to save time
 
     def get_max_profit_on_first_exp(self):
-        return max(self.get_profit_dist_on_first_exp())
+        d = self.get_profit_dist_on_first_exp()
+        m = max(d)
+        return m, d.index(m)
 
     def get_profit_dist_on_first_exp(self):
         options = [p for p in list(self.pos_dict.values()) if type(p.asset) is Option]
@@ -2325,10 +2383,10 @@ class CombinedPosition:
             # x1 x2 y1 y2
 
             def plot_n_std_dev(n):
-                ax1.plot([max(self.u_mid-n*self.expected_move, 0), max(self.u_mid-n*self.expected_move, 0)],
-                         [m, ma], f"#{str(999999 - n*222222)}")
-                ax1.plot([self.u_mid+n*self.expected_move, self.u_mid+n*self.expected_move],
-                         [m, ma], f"#{str(999999 - n*222222)}")
+                ax1.plot([max(self.u_mid - n * self.expected_move, 0), max(self.u_mid - n * self.expected_move, 0)],
+                         [m, ma], f"#{str(999999 - n * 222222)}")
+                ax1.plot([self.u_mid + n * self.expected_move, self.u_mid + n * self.expected_move],
+                         [m, ma], f"#{str(999999 - n * 222222)}")
 
             plot_n_std_dev(1)
             plot_n_std_dev(2)
@@ -2339,7 +2397,7 @@ class CombinedPosition:
         snap_cursor = SnappingCursor(ax1, line)
         fig.canvas.mpl_connect('motion_notify_event', snap_cursor.on_mouse_move)
 
-        s = self.underlying.upper() + " @ " + str(self.u_mid) + "\n"
+        s = f'{self.underlying.upper()} @ {self.u_bid:.2f}/{self.u_ask:.2f}\n'
         for pos in list(self.pos_dict.values()):
             if pos.quantity != 0:
                 s += pos.__repr__() + "\n"
@@ -2362,6 +2420,8 @@ class CombinedPosition:
         return on margin based on: max profit / self.bpr
         :return:
         """
+        if self.bpr == 0:
+            return float('inf')
         return self.max_profit / self.bpr * 0.5
 
 
@@ -2476,33 +2536,36 @@ class OptionStrategy:
 
     """
 
-    def __init__(self, name: str, position_builder: Callable[[], Optional[CombinedPosition]],
-                 conditions: dict, hints: list, tp_perc: float, sl_perc: float,
-                 env: EnvContainer, threshold=DEFAULT_THRESHOLD):
+    def __init__(self, name: str, position_builder: Callable[[Any], Optional[CombinedPosition]], env: EnvContainer,
+                 conditions: dict = None, hints: list = list(), tp_perc: float = 100, sl_perc: float = 100,
+                 close_dte: int = 21, close_perc: float = 50, threshold=DEFAULT_THRESHOLD):
 
         self.name = name
-        self.position_builder = position_builder  # name of the method that returns the position
-        self.positions: Optional[CombinedPosition] = None
-        self.conditions = conditions
+        self.position_builder = position_builder  # name of the method that returns the positios
         self.env_container = env
-        # self.env_container.chain = deepcopy(self.env_container.chain)
-        self.recommendation = 0
-        self.test_results = "No tests deducted yet"
 
-        self.close_dte = 21
-        self.close_perc = 50
-
-        self.greek_exposure = None  # set after environment check
-        self.close_date = None
-
-        self.hints = hints
+        # optionals
+        self.conditions = conditions
+        self.close_dte = close_dte
+        self.close_perc = close_perc
+        self.hints = ["Always set a take profit!", "It's just money :)"] + hints
         self.tp_percentage = tp_perc
         self.sl_percentage = sl_perc
         self.recommendation_threshold = threshold
 
+        # set when done building
+        self.recommendation = 0
+        self.test_results = "No tests deducted yet"
+        self.positions: Optional[CombinedPosition] = None
         self.ptp = -1
         self.psl = -1
         self.prob_of_profit = -1
+        self.tp_med_d = -1
+        self.tp_avg_d = -1
+        self.close_pop = -1
+        self.close_pn = -1
+        self.greek_exposure = None  # set after environment check
+        self.close_date = None
 
         self.get_positions(self.env_container)
 
@@ -2514,7 +2577,7 @@ class OptionStrategy:
 
     def get_test_results_str(self, t=0):
         to_ret = ""
-        indent = "\t"*t
+        indent = "\t" * t
         parts = self.test_results.split("\n")
         for part in parts:
             to_ret += f'{indent}{part}\n'
@@ -2534,24 +2597,24 @@ class OptionStrategy:
         inner_sl = "None" if self.sl_percentage >= 100 else f'{self.sl_percentage / 100 * self.positions.risk:.2f} $'
 
         greek_exp = f'{indent}Greek exposure:' \
-                   f'\n' \
-                   f'{indent}\tΔ = {self.greek_exposure["delta"]}' \
-                   f'\n' \
-                   f'{indent}\tΓ = {self.greek_exposure["gamma"]}' \
-                   f'\n' \
-                   f'{indent}\tν = {self.greek_exposure["vega"]}' \
-                   f'\n' \
-                   f'{indent}\tΘ = {self.greek_exposure["theta"]}' \
-                   f'\n' \
-                   f'{indent}\tρ = {self.greek_exposure["rho"]}' \
-                   f'\n' \
+                    f'\n' \
+                    f'{indent}\tΔ = {self.greek_exposure["delta"]}' \
+                    f'\n' \
+                    f'{indent}\tΓ = {self.greek_exposure["gamma"]}' \
+                    f'\n' \
+                    f'{indent}\tν = {self.greek_exposure["vega"]}' \
+                    f'\n' \
+                    f'{indent}\tΘ = {self.greek_exposure["theta"]}' \
+                    f'\n' \
+                    f'{indent}\tρ = {self.greek_exposure["rho"]}' \
+                    f'\n'
 
         return f'\n' \
                f'{indent}{"-" * 5} {get_timestamp()} {"-" * 94}' \
                f'\n' \
                f'{indent}{self.name} for {self.positions.underlying} ' \
                f'({self.env_container.u_bid:.2f} $/{self.env_container.u_ask:.2f} $) ' \
-               f'===> {(self.recommendation * 100):+3.2f} % (min. {self.recommendation_threshold*100:.2f} %):' \
+               f'===> {(self.recommendation * 100):+3.2f} % (min. {self.recommendation_threshold * 100:.2f} %):' \
                f'\n' \
                f'{indent}{"-" * 120}' \
                f'\n' \
@@ -2560,7 +2623,13 @@ class OptionStrategy:
                f'{indent}{" ." * 60}' \
                f'{indent}{self.positions.repr(t=t + 1)}' \
                f'{greek_exp if False else ""}' \
-               f'{indent}     Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} DTE)' \
+               f'{indent}     Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} days)' \
+               f'\n' \
+               f'{indent} PoP at close: {self.close_pop * 100:.2f} %' \
+               f'\n' \
+               f'{indent} P{int(self.tp_percentage)} at close: {self.close_pn * 100:.2f} %' \
+               f'\n' \
+               f'{indent}    Avg to TP: {int(self.tp_avg_d + 0.5)} days\t\t\tMed to TP: {int(self.tp_med_d)} days' \
                f'\n' \
                f'\n' \
                f'{indent}          PoP: {self.prob_of_profit * 100:3.2f} %' \
@@ -2623,20 +2692,24 @@ class OptionStrategy:
         """
         try:
             score = 0
-            self.test_results = ""
-            for key, val in self.conditions.items():
-                tmp = -2
-                for entry in val:
-                    if entry(env[key]) > tmp:
-                        self.test_results += f'\nTesting {self.name} for: {key} = {entry.__name__}\n' \
-                                             f'\t{key}:       {env[key]:+.2f}\n' \
-                                             f'\t{key} Score: {max(entry(env[key]), tmp):+.2f}\n'
-                    tmp = max(entry(env[key]), tmp)
-                    _debug(f'Testing {self.name} for: {key} = {entry.__name__}\n'
-                           f'\t{key}:       {env[key]:+.2f}\n'
-                           f'\t{key} Score: {tmp:+.2f}')
-                score += tmp
-            return score / len(self.conditions.keys())
+            if self.conditions:
+                self.test_results = ""
+                for key, val in self.conditions.items():
+                    tmp = -2
+                    for entry in val:
+                        if entry(env[key]) > tmp:
+                            self.test_results += f'\nTesting {self.name} for: {key} = {entry.__name__}\n' \
+                                                 f'\t{key}:       {env[key]:+.2f}\n' \
+                                                 f'\t{key} Score: {max(entry(env[key]), tmp):+.2f}\n'
+                        tmp = max(entry(env[key]), tmp)
+                        _debug(f'Testing {self.name} for: {key} = {entry.__name__}\n'
+                               f'\t{key}:       {env[key]:+.2f}\n'
+                               f'\t{key} Score: {tmp:+.2f}', 3)
+                    score += tmp
+                return score / len(self.conditions.keys())
+            else:
+                self.test_results = pf(env)
+                return 1
         except KeyError as e:
             _warn(f'Key "{e}" was not found in environment "{env.keys()}" '
                   f'but was requested by {self.name}')
@@ -2662,27 +2735,30 @@ class OptionStrategy:
         if self.recommendation >= self.recommendation_threshold:
 
             _debug(f'Threshold of {self.recommendation_threshold} for {self.name} was reached: '
-                   f'{self.recommendation:.5f} > {self.recommendation_threshold}')
-            _debug(f'Start building {self.name}')
+                   f'{self.recommendation:.5f} > {self.recommendation_threshold}', 2)
+            _debug(f'Start building {self.name}', 1)
 
             self.positions = self.position_builder()
 
             if self.positions is None:
+                _debug(f'Failed to build position for {self.name}', 1)
                 return False
 
             if not self._check_liquidity():
                 self.positions = None
+                _debug(f'Liquidity check failed for {self.name}', 1)
                 return False
 
             self._set_greek_exposure()
             self._set_close_date()
-            # self._set_probs_in_com_pos()
             self._set_probs()
             self.positions.set_expected_move(self.env_container.env["IV"])
 
+            _debug(f'Finished building position for {self.name}', 1)
+
         else:
             _debug(f'\nThreshold of {self.recommendation_threshold} for {self.name} was not reached: '
-                   f'{self.recommendation:+.5f} < {self.recommendation_threshold}\n')
+                   f'{self.recommendation:+.5f} < {self.recommendation_threshold}\n', 2)
 
     def _set_close_date(self):
         if self.positions:
@@ -2700,12 +2776,14 @@ class OptionStrategy:
         else:
             _warn("Cannot set strategy close date because no positions are existing yet")
 
+    """
     def _set_probs_in_com_pos(self):
         self.positions.set_probs(tp=self.tp_percentage / 100 * self.positions.max_profit,
                                  sl=self.sl_percentage / 100 * self.positions.risk)
 
         self.p50 = self.positions.p50
         self.prob_of_profit = self.positions.prob_of_profit
+    """
 
     def _set_probs(self):
         prob_dict = self.positions.mcs.get_pop_pn_sl(self,
@@ -2713,13 +2791,13 @@ class OptionStrategy:
         self.ptp = prob_dict.p_tp
         self.prob_of_profit = prob_dict.prob_of_profit
         self.psl = prob_dict.p_sl
+        self.tp_med_d = prob_dict.tp_med
+        self.tp_avg_d = prob_dict.tp_avg
+        self.close_pop = prob_dict.close_pop
+        self.close_pn = prob_dict.close_pn
 
     def _check_liquidity(self):
-        return self._check_spread() and self._check_vol()
-
-    def _check_spread(self):
-        # TODO check spread
-        return True
+        return self._check_bid_ask_spread() and self._check_vol()
 
     def _check_vol(self):
 
@@ -2731,10 +2809,15 @@ class OptionStrategy:
                 return False
         return True
 
-    def _build_comb_pos(self, *legs):
-        if all(legs):  # all legs have a quantity different from 0
-            cp = CombinedPosition(dict(), self.env_container.u_bid, self.env_container.u_ask, self.env_container.ticker,
-                                  self.env_container.mc)
+    # todo
+    def _check_bid_ask_spread(self):
+        return True
+
+    @staticmethod
+    def build_comb_pos(env_container, *legs):
+        if all(legs):  # no legs are empty, have to supply doulbe legs multiple times
+            cp = CombinedPosition(dict(), env_container.u_bid, env_container.u_ask, env_container.ticker,
+                                  env_container.mc)
             for leg in legs:
                 cp.add_option_from_option_chain(leg)
             return cp
@@ -2779,39 +2862,30 @@ class DummyStrat(OptionStrategy):
 
 
 class LongCall(OptionStrategy):
-    name = "Long Call"
 
-    def __init__(self, env=None, threshold=0.5, short_term=False):
+    def __init__(self, env: EnvContainer, threshold=0.5, short_term=False):
         """
         :param threshold: test_env must be greater than treshold in order to start building the position
         """
         self.short_term = short_term
 
-        self.threshold = threshold
-        self.position_builder = self._get_tasty_variation
-        self.conditions = {
+        conditions = {
             "short term outlook": [bullish],
             "mid term outlook": [bullish] if not short_term else [],
 
             "analyst rating": [bullish]
         }
 
-        self.hints = ["Always set a take profit!", "It's just money :)"]
-
-        self.tp_percentage = 50
-        self.sl_percentage = 100
-
-        self.close_dte = 21 if not short_term else 0
-        self.close_perc = 100
-
-        super().__init__(self.name,
-                         self.position_builder,
-                         self.conditions,
-                         self.hints,
-                         self.tp_percentage,
-                         self.sl_percentage,
-                         threshold=threshold,
-                         env=env)
+        super().__init__(name="Long Call",
+                         position_builder=self._get_tasty_variation,
+                         env=env,
+                         conditions=conditions,
+                         hints=[],
+                         tp_perc=50,
+                         sl_perc=100,
+                         close_dte=21 if not short_term else 0,
+                         close_perc=100,
+                         threshold=threshold)
 
     def _get_tasty_variation(self):
         """
@@ -2828,45 +2902,36 @@ class LongCall(OptionStrategy):
                 .expiration_close_to_dte(60) \
                 .delta_close_to(0.45)
 
-        cp = self._build_comb_pos(df)
+        cp = self.build_comb_pos(self.env_container, df)
 
         return cp if cp else None
 
 
 class LongPut(OptionStrategy):
-    name = "Long Put"
 
-    def __init__(self, env=None, threshold=0.5, short_term=False):
+    def __init__(self, env: EnvContainer, threshold=0.5, short_term=False):
         """
         :param threshold: test_env must be greater than treshold in order to start building the position
         """
         self.short_term = short_term
 
-        self.threshold = threshold
-        self.position_builder = self._get_tasty_variation
-        self.conditions = {
+        conditions = {
             "short term outlook": [bearish],
             "mid term outlook": [bearish] if not short_term else [],
 
             "analyst rating": [bearish]
         }
 
-        self.hints = ["Always set a take profit!", "It's just money :)", ""]
-
-        self.tp_percentage = 50
-        self.sl_percentage = 100
-
-        self.close_dte = 21 if not short_term else 0
-        self.close_perc = 100
-
-        super().__init__(self.name,
-                         self.position_builder,
-                         self.conditions,
-                         self.hints,
-                         self.tp_percentage,
-                         self.sl_percentage,
-                         threshold=threshold,
-                         env=env)
+        super().__init__(name="Long Put",
+                         position_builder=self._get_tasty_variation,
+                         env=env,
+                         conditions=conditions,
+                         hints=[],
+                         tp_perc=50,
+                         sl_perc=100,
+                         close_dte=21 if not short_term else 0,
+                         close_perc=100,
+                         threshold=threshold)
 
     def _get_tasty_variation(self):
         """
@@ -2883,75 +2948,20 @@ class LongPut(OptionStrategy):
                 .expiration_close_to_dte(60) \
                 .delta_close_to(0.45)
 
-        cp = self._build_comb_pos(df)
+        cp = self.build_comb_pos(self.env_container, df)
 
         return cp if not cp.empty() else None
 
 
-class CoveredCall(OptionStrategy):
-    name = "Covered Call"
-
-    def __init__(self, env=None, threshold=DEFAULT_THRESHOLD):
-        self.threshold = threshold
-        self.position_builder = self._get_tasty_variation
-        self.conditions = {
-            "IVR": [high_ivr],
-
-            "RSI20d": [low_rsi],
-
-            "short term outlook": [neutral, bullish],
-            "mid term outlook": [neutral, bullish],
-
-            "analyst rating": [neutral, bullish]
-        }
-
-        self.hints = ["Always set a take profit!", "It's just money :)"]
-
-        self.tp_percentage = 50
-        self.sl_percentage = 100
-
-        self.close_dte = 21
-        self.close_perc = 50
-
-        super().__init__(self.name,
-                         self.position_builder,
-                         self.conditions,
-                         self.hints,
-                         self.tp_percentage,
-                         self.sl_percentage,
-                         threshold=threshold,
-                         env=env)
-
-    def _get_tasty_variation(self):
-        oc = self.env_container.chain \
-            .calls() \
-            .short() \
-            .otm() \
-            .expiration_close_to_dte(45) \
-            .delta_close_to(0.3)
-
-        if oc:
-            cp = self._build_comb_pos(oc)
-            cp.add_asset(Stock(self.env_container.ticker, self.env_container.u_bid, self.env_container.u_ask), 100)
-
-            return cp
-
-        return None
-
-
 class VerticalDebitSpread(OptionStrategy):
-    name = "Vertical Debit Spread"
 
-    def __init__(self, env: EnvContainer = None, threshold=DEFAULT_THRESHOLD, opt_type="p"):
+    def __init__(self, env: EnvContainer, opt_type: str, threshold=DEFAULT_THRESHOLD):
         """
         :param threshold: test_env must be greater than treshold in order to start building the position
         """
         self.opt_type = opt_type
-        self.name = f'Vertical {"Call" if opt_type == "c" else "Put"} Debit Spread'
 
-        self.threshold = threshold
-        self.position_builder = self._get_tasty_variation2
-        self.conditions = {
+        conditions = {
             "IVR": [low_ivr, neutral_ivr],
 
             "short term outlook": [bullish] if opt_type == "c" else [bearish],
@@ -2960,22 +2970,16 @@ class VerticalDebitSpread(OptionStrategy):
             "analyst rating": [neutral, bullish] if opt_type == "c" else [neutral, bearish]
         }
 
-        self.hints = ["Always set a take profit!", "It's just money :)"]
-
-        self.tp_percentage = 50
-        self.sl_percentage = 101
-
-        self.close_dte = 10000
-        self.close_perc = 100
-
-        super().__init__(self.name,
-                         self.position_builder,
-                         self.conditions,
-                         self.hints,
-                         self.tp_percentage,
-                         self.sl_percentage,
-                         threshold=threshold,
-                         env=env)
+        super().__init__(name=f'Vertical {"Call" if opt_type == "c" else "Put"} Debit Spread',
+                         position_builder=self._get_tasty_variation2,
+                         env=env,
+                         conditions=conditions,
+                         hints=[],
+                         tp_perc=50,
+                         sl_perc=100,
+                         close_dte=21,
+                         close_perc=100,
+                         threshold=threshold)
 
     def _get_tasty_variation(self):
         """
@@ -2996,17 +3000,17 @@ class VerticalDebitSpread(OptionStrategy):
             short_leg = chain.expiration_close_to_dte(45).short().n_otm_strike_put(1, self.env_container.u_ask)
 
         if not long_leg or not short_leg:
-            _debug(f'Long leg is missing in {self.name}, aborting ...')
+            _debug(f'Long leg is missing in {self.name}, aborting ...', 1)
             return None
 
         if long_leg.options.loc[0, "expiration"] != short_leg.options.loc[0, "expiration"]:
-            _debug(f'Expirations are not equal in {self.name}, aborting ...')
+            _debug(f'Expirations are not equal in {self.name}, aborting ...', 1)
             return None
 
-        cp = self._build_comb_pos(long_leg, short_leg)
+        cp = self.build_comb_pos(self.env_container, long_leg, short_leg)
 
         if cp.empty() or cp.max_profit <= 0:
-            _debug(f'CombinedPosition is empty or max profit is < 0 in {self.name}, aborting ...')
+            _debug(f'CombinedPosition is empty or max profit is < 0 in {self.name}, aborting ...', 1)
             return None
 
         """
@@ -3031,14 +3035,14 @@ class VerticalDebitSpread(OptionStrategy):
                 short_strike = short_leg.options.loc[0, "strike"]
                 short_cost = short_leg.options.loc[0, "bid"]
 
-                long_leg = chain\
-                    .calls()\
-                    .expiration_close_to_dte(45)\
-                    .long()\
-                    .strike_higher_or_eq(short_strike)\
-                    .premium_to_strike_diff(1/3, short_cost, short_strike, "long")
+                long_leg = chain \
+                    .calls() \
+                    .expiration_close_to_dte(45) \
+                    .long() \
+                    .strike_higher_or_eq(short_strike) \
+                    .premium_to_strike_diff(1 / 3, short_cost, short_strike, "long")
             else:
-                _debug(f'Short leg is missing in {self.name}, aborting ...')
+                _debug(f'Short leg is missing in {self.name}, aborting ...', 1)
                 return None
         else:
             short_leg = chain.puts().short().expiration_close_to_dte(45).delta_close_to(0.3)
@@ -3059,21 +3063,21 @@ class VerticalDebitSpread(OptionStrategy):
                     .strike_lower_or_eq(short_strike) \
                     .premium_to_strike_diff(1 / 3, short_cost, short_strike, "long")
             else:
-                _debug(f'Short leg is missing in {self.name}, aborting ...')
+                _debug(f'Short leg is missing in {self.name}, aborting ...', 1)
                 return None
 
         if not long_leg or not short_leg:
-            _debug(f'Long leg is missing in {self.name}, aborting ...')
+            _debug(f'Long leg is missing in {self.name}, aborting ...', 1)
             return None
 
         if long_leg.options.loc[0, "expiration"] != short_leg.options.loc[0, "expiration"]:
-            _debug(f'Expirations are not equal in {self.name}, aborting ...')
+            _debug(f'Expirations are not equal in {self.name}, aborting ...', 1)
             return None
 
-        cp = self._build_comb_pos(long_leg, short_leg)
+        cp = self.build_comb_pos(self.env_container, long_leg, short_leg)
 
         if cp.empty() or cp.max_profit <= 0:
-            _debug(f'CombinedPosition is empty or max profit is < 0 in {self.name}, aborting ...')
+            _debug(f'CombinedPosition is empty or max profit is < 0 in {self.name}, aborting ...', 1)
             return None
 
         """
@@ -3086,24 +3090,24 @@ class VerticalDebitSpread(OptionStrategy):
 
 
 class VerticalCreditSpread(OptionStrategy):
-    name = "Vertical Credit Spread"
 
     # bullish = put spread
     # bearish = call spread
 
-    def __init__(self, env: EnvContainer = None, threshold=DEFAULT_THRESHOLD, opt_type="c", variation="tasty"):
+    def __init__(self, env: EnvContainer, opt_type: str, threshold=DEFAULT_THRESHOLD, variation="tasty"):
         """
         :param threshold: test_env must be greater than treshold in order to start building the position
         """
         self.opt_type = opt_type
-        self.name = f'Vertical {"Call" if opt_type == "c" else "Put"} Credit Spread'
 
-        self.threshold = threshold
         if variation == "tasty":
-            self.position_builder = self._get_tasty_variation2
-        if variation == "personal":
-            self.position_builder = self._get_personal_variation
-        self.conditions = {
+            position_builder = self._get_tasty_variation2
+        elif variation == "personal":
+            position_builder = self._get_personal_variation
+        else:
+            position_builder = self._get_tasty_variation
+
+        conditions = {
             "IVR": [high_ivr],
 
             "short term outlook": [bullish] if opt_type == "p" else [bearish],
@@ -3112,26 +3116,20 @@ class VerticalCreditSpread(OptionStrategy):
             "analyst rating": [neutral, bullish] if opt_type == "p" else [neutral, bearish]
         }
 
-        self.hints = ["Call spreads are more liquid and tighter",
-                      "Put spread offer higher premium and higher theta",
-                      "You can sell a put credit spread against a call credit spread to reduce delta without additional"
-                      " capital",
-                      "Prefer bearish credit spreads; short credit = short delta"]
-
-        self.tp_percentage = 50
-        self.sl_percentage = 101
-
-        self.close_dte = 21
-        self.close_perc = 100
-
-        super().__init__(self.name,
-                         self.position_builder,
-                         self.conditions,
-                         self.hints,
-                         self.tp_percentage,
-                         self.sl_percentage,
-                         threshold=threshold,
-                         env=env)
+        super().__init__(name=f'Vertical {"Call" if opt_type == "c" else "Put"} Credit Spread',
+                         position_builder=position_builder,
+                         env=env,
+                         conditions=conditions,
+                         hints=["Call spreads are more liquid and tighter",
+                                "Put spread offer higher premium and higher theta",
+                                "You can sell a put credit spread against a call credit spread to reduce delta without additional"
+                                " capital",
+                                "Prefer bearish credit spreads; short credit = short delta"],
+                         tp_perc=50,
+                         sl_perc=100,
+                         close_dte=21,
+                         close_perc=100,
+                         threshold=threshold)
 
     def _get_tasty_variation(self):
         """
@@ -3162,17 +3160,17 @@ class VerticalCreditSpread(OptionStrategy):
             short_leg = chain.expiration_close_to_dte(45).puts().short().delta_close_to(0.3)
 
         if not long_leg or not short_leg:
-            _debug(f'Long leg is missing in {self.name}, aborting ...')
+            _debug(f'Long leg is missing in {self.name}, aborting ...', 1)
             return None
 
         if long_leg.options.loc[0, "expiration"] != short_leg.options.loc[0, "expiration"]:
-            _debug(f'Expirations are not equal in {self.name}, aborting ...')
+            _debug(f'Expirations are not equal in {self.name}, aborting ...', 1)
             return None
 
-        cp = self._build_comb_pos(long_leg, short_leg)
+        cp = self.build_comb_pos(self.env_container, long_leg, short_leg)
 
         if cp.empty() or cp.max_profit <= 0:
-            _debug(f'CombinedPosition is empty or max profit is < 0 in {self.name}, aborting ...')
+            _debug(f'CombinedPosition is empty or max profit is < 0 in {self.name}, aborting ...', 1)
             return None
 
         """
@@ -3198,14 +3196,14 @@ class VerticalCreditSpread(OptionStrategy):
                 short_strike = short_leg.options.loc[0, "strike"]
                 short_cost = short_leg.options.loc[0, "bid"]
 
-                long_leg = chain\
-                    .calls()\
-                    .expiration_close_to_dte(45)\
-                    .long()\
-                    .strike_higher_or_eq(short_strike)\
-                    .premium_to_strike_diff(1/3, short_cost, short_strike, "long")
+                long_leg = chain \
+                    .calls() \
+                    .expiration_close_to_dte(45) \
+                    .long() \
+                    .strike_higher_or_eq(short_strike) \
+                    .premium_to_strike_diff(1 / 3, short_cost, short_strike, "long")
             else:
-                _debug(f'Short leg is missing in {self.name}, aborting ...')
+                _debug(f'Short leg is missing in {self.name}, aborting ...', 1)
                 return None
 
         else:
@@ -3227,21 +3225,21 @@ class VerticalCreditSpread(OptionStrategy):
                     .strike_lower_or_eq(short_strike) \
                     .premium_to_strike_diff(1 / 3, short_cost, short_strike, "long")
             else:
-                _debug(f'Short leg is missing in {self.name}, aborting ...')
+                _debug(f'Short leg is missing in {self.name}, aborting ...', 1)
                 return None
 
         if not long_leg or not short_leg:
-            _debug(f'Long leg is missing in {self.name}, aborting ...')
+            _debug(f'Long leg is missing in {self.name}, aborting ...', 1)
             return None
 
         if long_leg.options.loc[0, "expiration"] != short_leg.options.loc[0, "expiration"]:
-            _debug(f'Expirations are not equal in {self.name}, aborting ...')
+            _debug(f'Expirations are not equal in {self.name}, aborting ...', 1)
             return None
 
-        cp = self._build_comb_pos(long_leg, short_leg)
+        cp = self.build_comb_pos(self.env_container, long_leg, short_leg)
 
         if cp.empty() or cp.max_profit <= 0:
-            _debug(f'CombinedPosition is empty or max profit is < 0 in {self.name}, aborting ...')
+            _debug(f'CombinedPosition is empty or max profit is < 0 in {self.name}, aborting ...', 1)
             return None
 
         """
@@ -3331,6 +3329,7 @@ class ShortStrangle(OptionStrategy):
     ...
 
 
+# todo
 class CashSecuredPut(OptionStrategy):  # todo -> wheel
     ...
     """
@@ -3349,8 +3348,264 @@ class CashSecuredPut(OptionStrategy):  # todo -> wheel
     """
 
 
-# </editor-fold>CLO
+class CoveredCall(OptionStrategy):
 
+    def __init__(self, env: EnvContainer, threshold=DEFAULT_THRESHOLD):
+        conditions = {
+            "IVR": [high_ivr],
+
+            "RSI20d": [low_rsi],
+
+            "short term outlook": [neutral, bullish],
+            "mid term outlook": [neutral, bullish],
+
+            "analyst rating": [neutral, bullish]
+        }
+
+        super().__init__(name="Covered Call",
+                         position_builder=self._get_tasty_variation,
+                         env=env,
+                         conditions=conditions,
+                         hints=[],
+                         tp_perc=50,
+                         sl_perc=100,
+                         close_dte=21,
+                         close_perc=50,
+                         threshold=threshold)
+
+    def _get_tasty_variation(self):
+        oc = self.env_container.chain \
+            .calls() \
+            .short() \
+            .otm() \
+            .expiration_close_to_dte(45) \
+            .delta_close_to(0.3)
+
+        if oc:
+            cp = self.build_comb_pos(self.env_container, oc)
+            cp.add_asset(Stock(self.env_container.ticker, self.env_container.u_bid, self.env_container.u_ask), 100)
+
+            return cp
+
+        return None
+
+
+# todo
+class RatioSpread(OptionStrategy):
+    ...
+
+
+class CustomStratGenerator:
+
+    @staticmethod
+    def get_strats(chain: OptionChain,
+                   env: EnvContainer,
+                   target_param_dict: dict,
+                   strat_type: str,
+                   filters: List[List[Union[Callable, float]]] = None) -> Optional[List[OptionStrategy]]:
+        """
+        :param env:
+        :param chain:
+        :param filters:
+            methods of option chain to apply to it before iterating, e.g. expiration_close_to(45)
+            example:
+                [[exp_close_to, 45], ...]
+        :param strat_type
+            Spreads
+                vertical
+                horizontal
+                diagonal = vert+hori
+            Single leg
+                long/short put/call
+                csp
+                cc
+            Flies
+            Condors
+            Custom
+
+        :param target_param_dict:
+            max_gain: ("g", 0),
+            risk: ("le", 100),
+            delta_exp: ("eq", True),               -> True= ">=" 0, else False
+            theta/delta: ("ge", 0.5),
+            some_attribute_of_option_strat: (comparator, value)
+        """
+
+        # can be computed without explicitly creating the combined position
+        simple_attributes = {"risk", "tp", "sl", "close_dte", "bpr", "max_gain",
+                             "delta", "gamma", "vega", "theta", "rho",
+                             "delta_exp", "gamma_exp", "vega_exp", "theta_exp", "rho_exp"}
+
+        private_chain = deepcopy(chain)
+        if filters:
+            for filt in filters:
+                # todo make for more than 1 filter argument
+                private_chain = eval(f'private_chain.{filt[0].__name__}({filt[1]})')
+
+        # <editor-fold desc="Vertical Spread">
+
+        strats_to_return = []
+
+        # set tp perc & sl perc
+        tp_perc = 50
+        sl_perc = 100
+        latest_close_dte = 21
+
+        # if no probs or complicated parameters are given in target_param_dict, compute simple params manually
+
+        # difference set is empty = no complicated attributes present
+        if not set(target_param_dict.keys()) - simple_attributes:
+
+            for opt_type in ["p", "c"]:
+
+                for expiration_date in chain.expirations:
+
+                    tmp_chain = private_chain.expiration_date(expiration_date)
+                    df = tmp_chain.options
+
+                    strikes = list(set(df["strike"].tolist()))
+                    strikes.sort()
+
+                    close_dte = date_str_to_dte(expiration_date) - latest_close_dte
+
+                    for long_strike in strikes:
+
+                        for short_strike in strikes:
+
+                            if long_strike != short_strike:
+
+                                # <editor-fold desc="setting parameters">
+
+                                long = df.loc[(df["strike"] == long_strike) &
+                                              (df["direction"] == "long") &
+                                              (df["contract"] == opt_type)]
+                                short = df.loc[(df["strike"] == short_strike) &
+                                               (df["direction"] == "short") &
+                                               (df["contract"] == opt_type)]
+
+                                if long.empty or short.empty:
+                                    continue
+
+                                if short["bid"].iloc[0] <= 0:
+                                    continue
+
+                                # compute risk
+                                # abs(long strike - short strike) + long ask - short bid
+                                long_ask = long["ask"].iloc[0]
+                                short_bid = short["bid"].iloc[0]
+                                trade_cost = long_ask - short_bid
+                                strike_diff = abs(long_strike - short_strike)
+
+                                risk = (strike_diff + trade_cost) * 100
+                                bpr = risk
+
+                                # for calls: (for puts inverted <>)
+                                # if long strike < short strike => debit => max gain = strike_diff - debit paid
+                                # if long strike > short strike => credit => max gain = credit received
+
+                                if opt_type == "c":
+                                    # compute max gain
+                                    if long_strike > short_strike:
+                                        max_gain = -trade_cost * 100
+                                    else:  # short strike > long strike
+                                        max_gain = (strike_diff - trade_cost) * 100
+                                else:
+                                    # compute max gain
+                                    if long_strike < short_strike:
+                                        max_gain = -trade_cost * 100
+                                    else:  # short strike > long strike
+                                        max_gain = (strike_diff - trade_cost) * 100
+
+                                tp = tp_perc/100 * max_gain
+                                sl = -1 if sl_perc == 100 else sl_perc/100 * risk
+
+                                delta = long["delta"].iloc[0] + short["delta"].iloc[0]
+                                gamma = long["gamma"].iloc[0] + short["gamma"].iloc[0]
+                                theta = long["theta"].iloc[0] + short["theta"].iloc[0]
+                                vega = long["vega"].iloc[0] + short["vega"].iloc[0]
+                                rho = long["rho"].iloc[0] + short["rho"].iloc[0]
+
+                                gamma_exp = gamma >= 0
+                                delta_exp = delta >= 0
+                                vega_exp = vega >= 0
+                                theta_exp = theta >= 0
+                                rho_exp = rho >= 0
+
+                                # </editor-fold>
+
+                                unfitting = False
+                                for param, val in target_param_dict.items():
+                                    # calls the function given by val[0] on local correspondant of param from dict
+                                    # todo fails to detect negative delta?????
+                                    if not eval(f'{locals()[param]}.{"__" + val[0] + "__"}({val[1]})'):
+                                        unfitting = True
+                                        break
+                                    else:
+                                        _debug(f'{param}: {locals()[param]}.{"__" + val[0] + "__"}({val[1]}) = True', 3)
+
+                                if unfitting:
+                                    break
+
+                                _debug(f'Exp: {expiration_date}, OptType: {opt_type}, '
+                                       f'LongS: {long_strike}, ShortS: {short_strike} '
+                                       f'Risk: {risk}, Tp: {tp}', 3)
+
+                                long_leg = tmp_chain \
+                                    .long() \
+                                    .expiration_date(expiration_date) \
+                                    .strike_eq(long_strike)
+                                short_leg = tmp_chain \
+                                    .short() \
+                                    .expiration_date(expiration_date) \
+                                    .strike_eq(short_strike)
+
+                                if opt_type == "c":
+                                    long_leg = long_leg.calls()
+                                    short_leg = short_leg.calls()
+                                else:
+                                    long_leg = long_leg.puts()
+                                    short_leg = short_leg.puts()
+
+                                # print(pd.concat((long_leg.options, short_leg.options)).head())
+                                comb_pos = OptionStrategy.build_comb_pos(env, long_leg, short_leg)
+
+                                def position_builder_function() -> CombinedPosition:
+                                    return comb_pos
+
+                                opt_strat = OptionStrategy(name="Custom Vertical Spread",
+                                                           position_builder=position_builder_function,
+                                                           env=env,
+                                                           tp_perc=tp_perc,
+                                                           sl_perc=sl_perc,
+                                                           close_dte=latest_close_dte,
+                                                           threshold=-float('inf'))
+
+                                yield opt_strat
+
+                                # if we got here, build the position as it fits all criteria
+                                # strats_to_return.append(opt_strat)
+
+        else:
+            """
+            self.tp = 0
+            self.close_pop = -1
+            self.close_pn = -1
+            self.tp_med_d = -1
+            self.tp_avg_d = -1
+            self.ptp = -1
+            self.psl = -1
+            self.prob_of_profit = -1
+            """
+            raise NotImplementedError
+
+        #return strats_to_return
+
+        # </editor-fold>
+
+
+# </editor-fold>
+
+# <editor-fold desc="Ticker functions">
 def get_sp500_tickers(exclude_sub_industries=('Pharmaceuticals',
                                               'Managed Health Care',
                                               'Health Care Services')):
@@ -3371,9 +3626,17 @@ def get_high_option_vol_tickers(exclude_sub_industries=('Pharmaceuticals',
             "acb", "bb", "ung", "apt", "sqqq", "fcel"]
 
 
-def get_market_recommendations(start_from=None):
-    constraints = StrategyConstraints(strict_mode=False, min_oi30=100, min_vol30=1000, min_sinle_opt_vol=1)
-    tickers = get_high_option_vol_tickers()
+def get_trending_theta_strat_tickers():
+    return ["LAZR", "SNDL", "CCIV", "T", "RBLX", "AMC", "SPX", "WKHS", "AMZN", "RKT", "MSFT", "NIO", "GME", "PINS",
+            "AAPL", "SPY", "TSLA", "AMD", "PLTR", "MVIS"]
+
+
+# </editor-fold>
+
+
+def get_market_recommendations(ticker_f, start_from=None):
+    constraints = StrategyConstraints(strict_mode=False, min_oi30=100, min_vol30=1000, min_sinle_opt_vol=0)
+    tickers = ticker_f()
     mcs = MonteCarloSimulator(tickers)
     if start_from:
         tickers = tickers[tickers.index(start_from):]
@@ -3381,18 +3644,13 @@ def get_market_recommendations(start_from=None):
         try:
             propose_strategies(t, constraints, mcs, auto=True)
         except Exception as e:
-            _warn(f'Exception occured when getting strategies for ticker {t}: {e}')
+            _warn(f'Exception occured when getting strategies for ticker {t}: {e}', level=2)
             continue
 
 
 # AAPL
 # theta for long call is huge, is this correct?
-# pop & p50 for long call are 0, y?
 
-# Exception occured when getting strategies for ticker AFL: single positional indexer is out-of-bounds
-# Getting options meta data failed for ticker BLK with exception: invalid literal for int() with base 10: '\n'
-# Exception occured when getting strategies for ticker BIO: 'OptionChain' object has no attribute 'options'
-# Exception occured when getting strategies for ticker AZO: single positional indexer is out-of-bounds
 
 def model_test():
     # EuroOption.price() is best with 5-10 iterations, 1s for 10k iterations
@@ -3442,7 +3700,6 @@ def model_test():
 
 
 def test_greeks():
-
     opt_type = "p"
     u_price = 11.45
     strike = 8.5
@@ -3460,10 +3717,13 @@ def test_greeks():
 
 if __name__ == "__main__":
 
-    # todo print warnings to strat sum
+    # todo pops differ for 0 dte
+    # todo supply position and get all the stuff from option strat, "watcha think bout dis"
 
+    # todo break even on exit day
+
+    # todo print warnings to strat sum
     # todo add todays pl graph to non-auto
-    # todo non auto strat name in window title
 
     # todo is monte carlo assuming too much volatility?
     # todo timestamp stock_data_pickle and redownload every day once
@@ -3473,27 +3733,38 @@ if __name__ == "__main__":
     #  p(<=max prof u)*max prof + p(>= max loss u) +
     #  (1 - p(<=max prof u) - p(>= max loss u)) * (max prof + max loss) / 2 ... not exact!!!
 
+    # ERRORS
     # todo Exception occured when getting strategies for ticker ivr: math domain error
     # todo Exception occured when getting strategies for ticker et: math domain error
+    # todo avg/med days until tp hit
+    # todo pins +1 Jun 18 C 37.0 @ 30.0/34.55 = 3455.00 $   negative max loss
+    # 			-1 Jun 18 C 25.0 @ 50.95/54.6 = -5095.00 $
+    # todo negative max profit on long call msft +1 Jun 18 C 95.0 @ 120.3/120.85
+    # todo Exception occured when getting strategies for ticker AFL: single positional indexer is out-of-bounds
+    # todo Getting options meta data failed for ticker BLK with exception: invalid literal for int() with base 10: '\n'
+    # todo Exception occured when getting strategies for ticker BIO: 'OptionChain' object has no attribute 'options'
+    # todo Exception occured when getting strategies for ticker AZO: single positional indexer is out-of-bounds
 
+    # LONG TERM
     # todo prob forecasts use historic variance, plot uses implied vol ... maybe use this too for forecasts?
 
-    # todo actual own restrictions (iterate), max risk, theta/delta, RoM...
-
-    # todo pop @ anticipated close
-
-    # todo negative max profit on long call msft +1 Jun 18 C 95.0 @ 120.3/120.85
-
-    # todo avg/med days until tp hit
-
-    """
-    propose_strategies("nio",
+    t = "amc"
+    ssc = {
+        "tp": ("gt", 10),
+        "risk": ("le", 100),
+        "delta": ("lt", 0)
+    }
+    # """
+    propose_strategies(t,
                        StrategyConstraints(strict_mode=False,
-                                           min_oi30=100,
+                                           min_oi30=1000,
                                            min_vol30=1000,
-                                           min_sinle_opt_vol=1),
-                       MonteCarloSimulator(tickers=["nio"]),
-                       auto=False, )
-    #"""
+                                           min_sinle_opt_vol=0),
+                       MonteCarloSimulator(tickers=[t]),
+                       auto=False,
+                       use_predefined_strats=False,
+                       single_strat_cons=ssc,
+                       filters=[[OptionChain.volume, 50]])
+    # """
 
-    get_market_recommendations()
+    # get_market_recommendations(get_trending_theta_strat_tickers)
