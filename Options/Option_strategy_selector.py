@@ -1171,6 +1171,8 @@ class Position:
         # quantity is irrelevant for break even of single position
 
         if type(self.asset) is Option:
+            if self.quantity == 0:
+                return -1
             if self.quantity < 0:
                 if self.asset.opt_type == "c":
                     return self.asset.strike - self.cost / 100  # mind you: cost is negative for short options
@@ -1184,7 +1186,7 @@ class Position:
 
         if type(self.asset) is Stock:
             if self.quantity == 0:
-                return 0
+                return -1
             if self.quantity > 0:
                 return self.asset.ask
             if self.quantity < 0:
@@ -2352,7 +2354,7 @@ class CombinedPosition:
     def get_max_profit_on_first_exp(self):
         d = self.profit_dist_at_first_exp
         m = max(d)
-        return m, d.index(m)
+        return m, d.index(m)/100
 
     def get_profit_dist_on_first_exp(self):
         options = [p for p in list(self.pos_dict.values()) if type(p.asset) is Option]
@@ -3452,6 +3454,8 @@ class CustomStratGenerator:
             some_attribute_of_option_strat: (comparator, value)
         """
 
+        # todo maybe put the vertical spread part to the vertical spread class
+
         # can be computed without explicitly creating the combined position
         simple_attributes = {"risk", "tp", "sl", "close_dte", "bpr", "max_gain",
                              "delta", "gamma", "vega", "theta", "rho",
@@ -3475,151 +3479,149 @@ class CustomStratGenerator:
         # if no probs or complicated parameters are given in target_param_dict, compute simple params manually
 
         # difference set is empty = no complicated attributes present
-        if not set(target_param_dict.keys()) - simple_attributes:
+        #if not set(target_param_dict.keys()) - simple_attributes:
 
-            for opt_type in ["p", "c"]:
+        for opt_type in ["p", "c"]:
 
-                for expiration_date in chain.expirations:
+            for expiration_date in chain.expirations:
 
-                    tmp_chain = private_chain.expiration_date(expiration_date)
-                    df = tmp_chain.options
+                tmp_chain = private_chain.expiration_date(expiration_date)
+                df = tmp_chain.options
 
-                    strikes = list(set(df["strike"].tolist()))
-                    strikes.sort()
+                strikes = list(set(df["strike"].tolist()))
+                strikes.sort()
 
-                    close_dte = date_str_to_dte(expiration_date) - latest_close_dte
+                close_dte = date_str_to_dte(expiration_date) - latest_close_dte
 
-                    for long_strike in strikes:
+                for long_strike in strikes:
 
-                        for short_strike in strikes:
+                    for short_strike in strikes:
 
-                            if long_strike != short_strike:
+                        if long_strike != short_strike:
 
-                                # <editor-fold desc="setting parameters">
+                            # <editor-fold desc="setting parameters">
 
-                                long = df.loc[(df["strike"] == long_strike) &
-                                              (df["direction"] == "long") &
-                                              (df["contract"] == opt_type)]
-                                short = df.loc[(df["strike"] == short_strike) &
-                                               (df["direction"] == "short") &
-                                               (df["contract"] == opt_type)]
+                            long = df.loc[(df["strike"] == long_strike) &
+                                          (df["direction"] == "long") &
+                                          (df["contract"] == opt_type)]
+                            short = df.loc[(df["strike"] == short_strike) &
+                                           (df["direction"] == "short") &
+                                           (df["contract"] == opt_type)]
 
-                                if long.empty or short.empty:
-                                    continue
+                            if long.empty or short.empty:
+                                continue
 
-                                if short["bid"].iloc[0] <= 0:
-                                    continue
+                            if short["bid"].iloc[0] <= 0:
+                                continue
 
-                                # compute risk
-                                # abs(long strike - short strike) + long ask - short bid
-                                long_ask = long["ask"].iloc[0]
-                                short_bid = short["bid"].iloc[0]
-                                trade_cost = long_ask - short_bid
-                                strike_diff = abs(long_strike - short_strike)
+                            # compute risk
+                            # abs(long strike - short strike) + long ask - short bid
+                            long_ask = long["ask"].iloc[0]
+                            short_bid = short["bid"].iloc[0]
+                            trade_cost = long_ask - short_bid
+                            strike_diff = abs(long_strike - short_strike)
 
-                                risk = (strike_diff + trade_cost) * 100
-                                bpr = risk
+                            risk = (strike_diff + trade_cost) * 100
+                            bpr = risk
 
-                                # for calls: (for puts inverted <>)
-                                # if long strike < short strike => debit => max gain = strike_diff - debit paid
-                                # if long strike > short strike => credit => max gain = credit received
+                            # for calls: (for puts inverted <>)
+                            # if long strike < short strike => debit => max gain = strike_diff - debit paid
+                            # if long strike > short strike => credit => max gain = credit received
 
-                                if opt_type == "c":
-                                    # compute max gain
-                                    if long_strike > short_strike:
-                                        max_gain = -trade_cost * 100
-                                    else:  # short strike > long strike
-                                        max_gain = (strike_diff - trade_cost) * 100
-                                else:
-                                    # compute max gain
-                                    if long_strike < short_strike:
-                                        max_gain = -trade_cost * 100
-                                    else:  # short strike > long strike
-                                        max_gain = (strike_diff - trade_cost) * 100
+                            if opt_type == "c":
+                                # compute max gain
+                                if long_strike > short_strike:
+                                    max_gain = -trade_cost * 100
+                                else:  # short strike > long strike
+                                    max_gain = (strike_diff - trade_cost) * 100
+                            else:
+                                # compute max gain
+                                if long_strike < short_strike:
+                                    max_gain = -trade_cost * 100
+                                else:  # short strike > long strike
+                                    max_gain = (strike_diff - trade_cost) * 100
 
-                                tp = tp_perc/100 * max_gain
-                                sl = -1 if sl_perc == 100 else sl_perc/100 * risk
+                            tp = tp_perc/100 * max_gain
+                            sl = -1 if sl_perc == 100 else sl_perc/100 * risk
 
-                                delta = long["delta"].iloc[0] + short["delta"].iloc[0]
-                                gamma = long["gamma"].iloc[0] + short["gamma"].iloc[0]
-                                theta = long["theta"].iloc[0] + short["theta"].iloc[0]
-                                vega = long["vega"].iloc[0] + short["vega"].iloc[0]
-                                rho = long["rho"].iloc[0] + short["rho"].iloc[0]
+                            delta = long["delta"].iloc[0] + short["delta"].iloc[0]
+                            gamma = long["gamma"].iloc[0] + short["gamma"].iloc[0]
+                            theta = long["theta"].iloc[0] + short["theta"].iloc[0]
+                            vega = long["vega"].iloc[0] + short["vega"].iloc[0]
+                            rho = long["rho"].iloc[0] + short["rho"].iloc[0]
 
-                                gamma_exp = gamma >= 0
-                                delta_exp = delta >= 0
-                                vega_exp = vega >= 0
-                                theta_exp = theta >= 0
-                                rho_exp = rho >= 0
+                            gamma_exp = gamma >= 0
+                            delta_exp = delta >= 0
+                            vega_exp = vega >= 0
+                            theta_exp = theta >= 0
+                            rho_exp = rho >= 0
 
-                                # </editor-fold>
+                            # </editor-fold>
 
-                                unfitting = False
-                                for param, val in target_param_dict.items():
-                                    # calls the function given by val[0] on local correspondant of param from dict
-                                    # todo fails to detect negative delta?????
-                                    if not eval(f'{param}.{"__" + val[0] + "__"}({val[1]})'):
-                                        unfitting = True
-                                        break
-                                    else:
-                                        _debug(f'{param}: {param}.{"__" + val[0] + "__"}({val[1]}) = True', 3)
-
-                                if unfitting:
+                            unfitting = False
+                            for param, val in target_param_dict.items():
+                                # calls the function given by val[0] on local correspondant of param from dict
+                                # todo fails to detect negative delta?????
+                                if not eval(f'{param}.{"__" + val[0] + "__"}({val[1]})'):
+                                    unfitting = True
                                     break
-
-                                _debug(f'Exp: {expiration_date}, OptType: {opt_type}, '
-                                       f'LongS: {long_strike}, ShortS: {short_strike} '
-                                       f'Risk: {risk}, Tp: {tp}', 3)
-
-                                long_leg = tmp_chain \
-                                    .long() \
-                                    .expiration_date(expiration_date) \
-                                    .strike_eq(long_strike)
-                                short_leg = tmp_chain \
-                                    .short() \
-                                    .expiration_date(expiration_date) \
-                                    .strike_eq(short_strike)
-
-                                if opt_type == "c":
-                                    long_leg = long_leg.calls()
-                                    short_leg = short_leg.calls()
                                 else:
-                                    long_leg = long_leg.puts()
-                                    short_leg = short_leg.puts()
+                                    _debug(f'{param}: {param}.{"__" + val[0] + "__"}({val[1]}) = True', 3)
 
-                                # print(pd.concat((long_leg.options, short_leg.options)).head())
-                                comb_pos = OptionStrategy.build_comb_pos(env, long_leg, short_leg)
+                            if unfitting:
+                                break
 
-                                def position_builder_function() -> CombinedPosition:
-                                    return comb_pos
+                            _debug(f'Exp: {expiration_date}, OptType: {opt_type}, '
+                                   f'LongS: {long_strike}, ShortS: {short_strike} '
+                                   f'Risk: {risk}, Tp: {tp}', 3)
 
-                                opt_strat = OptionStrategy(name="Custom Vertical Spread",
-                                                           position_builder=position_builder_function,
-                                                           env=env,
-                                                           tp_perc=tp_perc,
-                                                           sl_perc=sl_perc,
-                                                           close_dte=latest_close_dte,
-                                                           threshold=-float('inf'))
+                            long_leg = tmp_chain \
+                                .long() \
+                                .expiration_date(expiration_date) \
+                                .strike_eq(long_strike)
+                            short_leg = tmp_chain \
+                                .short() \
+                                .expiration_date(expiration_date) \
+                                .strike_eq(short_strike)
 
-                                yield opt_strat
+                            if opt_type == "c":
+                                long_leg = long_leg.calls()
+                                short_leg = short_leg.calls()
+                            else:
+                                long_leg = long_leg.puts()
+                                short_leg = short_leg.puts()
 
-                                # if we got here, build the position as it fits all criteria
-                                # strats_to_return.append(opt_strat)
+                            # print(pd.concat((long_leg.options, short_leg.options)).head())
+                            comb_pos = OptionStrategy.build_comb_pos(env, long_leg, short_leg)
 
-        else:
-            """
-            self.tp = 0
-            self.close_pop = -1
-            self.close_pn = -1
-            self.tp_med_d = -1
-            self.tp_avg_d = -1
-            self.ptp = -1
-            self.psl = -1
-            self.prob_of_profit = -1
-            """
-            raise NotImplementedError
+                            """
+                                self.tp = 0
+                                self.close_pop = -1
+                                self.close_pn = -1
+                                self.tp_med_d = -1
+                                self.tp_avg_d = -1
+                                self.ptp = -1
+                                self.psl = -1
+                                self.prob_of_profit = -1
+                            """
 
-        #return strats_to_return
+                            # check other specific conditions here
+
+                            def position_builder_function() -> CombinedPosition:
+                                return comb_pos
+
+                            opt_strat = OptionStrategy(name="Custom Vertical Spread",
+                                                       position_builder=position_builder_function,
+                                                       env=env,
+                                                       tp_perc=tp_perc,
+                                                       sl_perc=sl_perc,
+                                                       close_dte=latest_close_dte,
+                                                       threshold=-float('inf'))
+
+                            yield opt_strat
+
+                            # if we got here, build the position as it fits all criteria
+                            # strats_to_return.append(opt_strat)
 
         # </editor-fold>
 

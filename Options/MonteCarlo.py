@@ -239,6 +239,8 @@ class MonteCarloSimulator(object):
         # constants
 
         def round_cut(x, n=0):
+            if x == 0:
+                return 0
             return x / abs(x) * int(abs(x) * 10 ** n - 0.5) / 10 ** n
 
         binomial_iterations = 5  # good tradeoff between accuracy and time
@@ -424,11 +426,11 @@ class MonteCarloSimulator(object):
         long_dir = option_strat.positions.max_profit_point > option_strat.positions.break_even
         cases = sum([1 for x in simulated_stock_prices.iloc[close_days, :] if x > option_strat.positions.break_even]) \
             if long_dir else \
-            sum([1 for x in simulated_stock_prices.iloc[close_days,:] if x < option_strat.positions.break_even])
+            sum([1 for x in simulated_stock_prices.iloc[close_days, :] if x < option_strat.positions.break_even])
 
-        print("zzz")
         print(f'Max gain: {max(gains_at_close)}, Min gain: {min(gains_at_close)}')
-        print(f'Stock price {"above" if long_dir else "below"} BE @ exp in {cases} cases')
+        print(f'Stock price {"above" if long_dir else "below"} {option_strat.positions.break_even} @ exp in {cases} '
+              f'cases bc max_profit u is {option_strat.positions.max_profit_point}')
         print(f'Gains at close >0 in {sum([1 for x in gains_at_close if x > 0])} cases')
 
         if tp_hit_days_list:
