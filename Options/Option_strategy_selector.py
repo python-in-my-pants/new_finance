@@ -56,12 +56,15 @@ def _debug(*args):
     l = args[-1]
     if type(l) == int:
         level = l
+        if debug and level <= debug_level:
+            print()
+            print(*args[:-1])
     else:
         # if no level is given, assume importance
         level = 1
-    if debug and level <= debug_level:
-        print()
-        print(*args[:-1])
+        if debug and level <= debug_level:
+            print()
+            print(*args)
 
 
 class RiskWarning(Warning):
@@ -598,7 +601,7 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
           f'  Short term outlook (20 d): {meta.short_outlook}\n'
           f'    Mid term outlook (50 d): {meta.mid_outlook}\n'
           f'  Long term outlook (100 d): {meta.long_outlook}\n'
-          f'             Analyst rating: {meta.analyst_rating:.2f}\n')
+          f'             Analyst rating: {meta.analyst_rating:.2f}')
 
     def binary_events_present():
 
@@ -639,7 +642,7 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
 
         _debug(f'Liquidity:\n\n'
                f'30 day average option volume: {meta.vol30:7d}\n'
-               f'30 day average open interest: {meta.oi30:7d}')
+               f'30 day average open interest: {meta.oi30:7d}\n')
 
         if not next_puts.empty():
             put_spr_r, put_spr_abs = get_bid_ask_spread(next_puts, meta.u_ask)
@@ -781,7 +784,7 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
         for pos in proposed_strategies:
             if pos.positions:
                 print(pos)
-                pos.positions.plot_profit_dist_on_first_exp()
+                # pos.positions.plot_profit_dist_on_first_exp()
 
 
 # <editor-fold desc="Option Framework">
@@ -812,14 +815,18 @@ class Position:
         self.underlying_price = underlying_price
 
         self.greeks = DDict({"delta": 0, "gamma": 0, "theta": 0, "vega": 0, "rho": 0})
-        self.set_greeks()
 
         self.cost = self.get_cost()
         self.risk = self.get_risk()
-        self.max_profit = self.get_max_profit()
         self.bpr = self.get_bpr()
+
+        self.max_profit = self.get_max_profit()
+
         self.rom = self.get_rom()
+
         self.break_even = self.get_break_even_at_exp()
+
+        self.set_greeks()
 
         # todo
         self.p50 = 0
@@ -829,6 +836,19 @@ class Position:
 
     def __str__(self):
         return self.repr()
+
+    def update(self):
+        self.cost = self.get_cost()
+        self.risk = self.get_risk()
+        self.bpr = self.get_bpr()
+
+        self.max_profit = self.get_max_profit()
+
+        self.rom = self.get_rom()
+
+        self.break_even = self.get_break_even_at_exp()
+
+        self.set_greeks()
 
     def short(self, t=0):
         indent = "\t" * t
@@ -939,8 +959,7 @@ class Position:
 
     def change_quantity_to(self, x):
         self.quantity = x
-        self.cost = self.get_cost()
-        self.set_greeks()
+        self.update()
 
     def add_x(self, x):
         self.change_quantity_to(self.quantity + x)
@@ -1736,7 +1755,7 @@ class OptionChain:
 # todo TEST!
 class CombinedPosition:
 
-    def __init__(self, pos_dict: dict, u_bid: float, u_ask: float, ticker: str, mcs: MonteCarloSimulator):
+    def __init__(self, pos_dict: Dict[str, Position], u_bid: float, u_ask: float, ticker: str, mcs: MonteCarloSimulator):
         """
         :param pos_dict:  (option symbol/stock ticker): position
         """
@@ -1765,6 +1784,7 @@ class CombinedPosition:
 
         self.p50 = -1  # prob of reaching 50 % of max rofit until first expiration
         self.prob_of_profit = -1
+        self.profit_dist_at_first_exp = None
 
         if self.pos_dict.values():
             self.update_status()
@@ -1891,6 +1911,7 @@ class CombinedPosition:
         return not any([pos.quantity for pos in list(self.pos_dict.values())])
 
     def update_status(self):
+        self.profit_dist_at_first_exp = self.get_profit_dist_on_first_exp()
         self.cost = self.get_cost()
         self.greeks = self.get_greeks()
         self.theta_to_delta = float(self.greeks["theta"] / float(max(abs(self.greeks["delta"]), 0.00001)))
@@ -2289,7 +2310,7 @@ class CombinedPosition:
     def get_break_even(self):
         if self.empty():
             return 0
-        dist = self.get_profit_dist_on_first_exp()
+        dist = self.profit_dist_at_first_exp
         return abs_min_closest_index(dist, 0.0) / 100
 
     def get_profit_dist_at_exp(self):
@@ -2329,7 +2350,7 @@ class CombinedPosition:
         return self.get_max_profit_on_first_exp()  # todo put this together with the other call to this method to save time
 
     def get_max_profit_on_first_exp(self):
-        d = self.get_profit_dist_on_first_exp()
+        d = self.profit_dist_at_first_exp
         m = max(d)
         return m, d.index(m)
 
@@ -2369,7 +2390,7 @@ class CombinedPosition:
 
     def plot_profit_dist_at_date(self, d):
 
-        max_profits = self.get_profit_dist_on_first_exp()
+        max_profits = self.profit_dist_at_first_exp
 
         x = [i / 100 for i in range(len(max_profits))]
         fig, ax1 = plt.subplots()
@@ -2625,16 +2646,16 @@ class OptionStrategy:
                f'{greek_exp if False else ""}' \
                f'{indent}     Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} days)' \
                f'\n' \
-               f'{indent} PoP at close: {self.close_pop * 100:.2f} %' \
+               f'{indent} PoP at close: {self.close_pop * 100: >3.2f} %' \
                f'\n' \
-               f'{indent} P{int(self.tp_percentage)} at close: {self.close_pn * 100:.2f} %' \
+               f'{indent} P{int(self.tp_percentage)} at close: {self.close_pn * 100: >3.2f} %' \
                f'\n' \
                f'{indent}    Avg to TP: {int(self.tp_avg_d + 0.5)} days\t\t\tMed to TP: {int(self.tp_med_d)} days' \
                f'\n' \
                f'\n' \
-               f'{indent}          PoP: {self.prob_of_profit * 100:3.2f} %' \
+               f'{indent}   PoP at exp: {self.prob_of_profit * 100: >3.2f} %' \
                f'\n' \
-               f'{indent}          P{int(self.tp_percentage)}: {self.ptp * 100:3.2f} %' \
+               f'{indent}   P{int(self.tp_percentage)} at exp: {self.ptp * 100: >3.2f} %' \
                f'\n' \
                f'{indent}\n    Stop loss: {inner_sl}' \
                f'\n' \
@@ -3537,11 +3558,11 @@ class CustomStratGenerator:
                                 for param, val in target_param_dict.items():
                                     # calls the function given by val[0] on local correspondant of param from dict
                                     # todo fails to detect negative delta?????
-                                    if not eval(f'{locals()[param]}.{"__" + val[0] + "__"}({val[1]})'):
+                                    if not eval(f'{param}.{"__" + val[0] + "__"}({val[1]})'):
                                         unfitting = True
                                         break
                                     else:
-                                        _debug(f'{param}: {locals()[param]}.{"__" + val[0] + "__"}({val[1]}) = True', 3)
+                                        _debug(f'{param}: {param}.{"__" + val[0] + "__"}({val[1]}) = True', 3)
 
                                 if unfitting:
                                     break
@@ -3716,6 +3737,8 @@ def test_greeks():
 
 
 if __name__ == "__main__":
+
+    # TODO FIX GIANT WHITESPACE!!!
 
     # todo pops differ for 0 dte
     # todo supply position and get all the stuff from option strat, "watcha think bout dis"
