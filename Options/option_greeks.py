@@ -736,23 +736,23 @@ def _gbs(option_type, fs, x, t, r, b, v):
     if option_type == "c":
         # it's a call
         _debug("     Call Option")
-        value = fs * math.exp((b - r) * t) * norm.cdf(d1) - x * math.exp(-r * t) * norm.cdf(d2)
-        delta = math.exp((b - r) * t) * norm.cdf(d1)
-        gamma = math.exp((b - r) * t) * norm.pdf(d1) / (fs * v * t__sqrt)
-        theta = -(fs * v * math.exp((b - r) * t) * norm.pdf(d1)) / (2 * t__sqrt) - (b - r) * fs * math.exp(
-            (b - r) * t) * norm.cdf(d1) - r * x * math.exp(-r * t) * norm.cdf(d2)
-        vega = math.exp((b - r) * t) * fs * t__sqrt * norm.pdf(d1)
-        rho = x * t * math.exp(-r * t) * norm.cdf(d2)
+        value = fs * math.exp((b - r) * t) * norm._cdf(d1) - x * math.exp(-r * t) * norm._cdf(d2)
+        delta = math.exp((b - r) * t) * norm._cdf(d1)
+        gamma = math.exp((b - r) * t) * norm._pdf(d1) / (fs * v * t__sqrt)
+        theta = -(fs * v * math.exp((b - r) * t) * norm._pdf(d1)) / (2 * t__sqrt) - (b - r) * fs * math.exp(
+            (b - r) * t) * norm._cdf(d1) - r * x * math.exp(-r * t) * norm._cdf(d2)
+        vega = math.exp((b - r) * t) * fs * t__sqrt * norm._pdf(d1)
+        rho = x * t * math.exp(-r * t) * norm._cdf(d2)
     else:
         # it's a put
         _debug("     Put Option")
-        value = x * math.exp(-r * t) * norm.cdf(-d2) - (fs * math.exp((b - r) * t) * norm.cdf(-d1))
-        delta = -math.exp((b - r) * t) * norm.cdf(-d1)
-        gamma = math.exp((b - r) * t) * norm.pdf(d1) / (fs * v * t__sqrt)
-        theta = -(fs * v * math.exp((b - r) * t) * norm.pdf(d1)) / (2 * t__sqrt) + (b - r) * fs * math.exp(
-            (b - r) * t) * norm.cdf(-d1) + r * x * math.exp(-r * t) * norm.cdf(-d2)
-        vega = math.exp((b - r) * t) * fs * t__sqrt * norm.pdf(d1)
-        rho = -x * t * math.exp(-r * t) * norm.cdf(-d2)
+        value = x * math.exp(-r * t) * norm._cdf(-d2) - (fs * math.exp((b - r) * t) * norm._cdf(-d1))
+        delta = -math.exp((b - r) * t) * norm._cdf(-d1)
+        gamma = math.exp((b - r) * t) * norm._pdf(d1) / (fs * v * t__sqrt)
+        theta = -(fs * v * math.exp((b - r) * t) * norm._pdf(d1)) / (2 * t__sqrt) + (b - r) * fs * math.exp(
+            (b - r) * t) * norm._cdf(-d1) + r * x * math.exp(-r * t) * norm._cdf(-d2)
+        vega = math.exp((b - r) * t) * fs * t__sqrt * norm._pdf(d1)
+        rho = -x * t * math.exp(-r * t) * norm._cdf(-d2)
 
     _debug("     d1= {0}\n     d2 = {1}".format(d1, d2))
     _debug("     delta = {0}\n     gamma = {1}\n     theta = {2}\n     vega = {3}\n     rho={4}".format(delta, gamma,
@@ -1016,7 +1016,7 @@ def _phi(fs, t, gamma, h, i, r, b, v):
     lambda1 = (-r + gamma * b + 0.5 * gamma * (gamma - 1) * (v ** 2))
     kappa = (2 * b) / (v ** 2) + (2 * gamma - 1)
 
-    phi = math.exp(lambda1 * t) * (fs ** gamma) * (norm.cdf(d1) - ((i / fs) ** kappa) * norm.cdf(d2))
+    phi = math.exp(lambda1 * t) * (fs ** gamma) * (norm._cdf(d1) - ((i / fs) ** kappa) * norm._cdf(d2))
 
     _debug("-----")
     _debug("Debug info for: _phi()")

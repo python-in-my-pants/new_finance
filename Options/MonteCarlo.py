@@ -15,6 +15,7 @@ from option_greeks import get_greeks
 import matplotlib.pyplot as plt
 import random
 from pprint import pprint as pp
+from Utility import flatten
 
 
 class MonteCarloSimulator(object):
@@ -30,14 +31,16 @@ class MonteCarloSimulator(object):
     ticker, days, iterations -> pop, p_n, p_sl
     """
 
-    def __init__(self, tickers: list, days: int = 1000, iterations: int = 10000):
+    def __init__(self, tickers: list, days: int = 100, iterations: int = 10**5):
 
+        print("Building monte carlo simulator ...")
         tickers.append("msft")
         tickers.sort()
         self.tickers = [t.lower() for t in tickers]
         self.daily_close_prices_all_tickers = self.load_stock_data_dict(tickers)  # ticker ->
         self.sim_df = self.monte_carlo(tickers, days_forecast=days, iterations=iterations)
         self.days = days
+        print("Finished building monte carlo simulator!")
 
     # <editor-fold desc="file handling">
     def safe_stock_data_dict(self, data_df: pd.DataFrame):
@@ -213,6 +216,20 @@ class MonteCarloSimulator(object):
 
         return len(over) / (len(over) + len(less))
 
+    def plot_simulated_prices(self, ticker: str, bin_size: float = 1):
+
+        print(f'Plotting simulated prices for ticker {ticker}')
+
+        prices = \
+            flatten([self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[d, 1:].to_list() for d in range(100)])
+
+        bins = [i for i in range(int((max(prices) / bin_size) + 1))]
+
+        binned_prices = [sum([1 for p in prices if i * bin_size <= p < (i + 1) * bin_size])/len(prices) for i in bins]
+
+        plt.bar(bins, binned_prices)
+        plt.show()
+
     def get_pop(self, ticker, days, break_even, best_u_price):
 
         end_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[days+1, 1:].astype('float')
@@ -228,13 +245,17 @@ class MonteCarloSimulator(object):
             return -1
 
     @timeit
-    def get_pn_psl(self, option_strat, risk_free_rate, force_iterations=None, mode="bjerksund") -> [float, float, int, int, float, float]:
+    def get_pn_psl(self, option_strat, risk_free_rate, force_iterations=None, mode="bjerksund", with_plots=False) \
+            -> [float, float, int, int, float, float]:
         """
         TODO use bid/ask dependent on long/short leg, so the spread is incorporated into the calc
          -> already done by assuming fill at nat instead of mid, we pay the full spread on entry
 
         TODO shorts make this faulty
 
+        :param with_plots:
+        :param mode:
+        :param force_iterations:
         :param option_strat:
         :param risk_free_rate:
         :return: prob of reaching profit target or hitting stop loss
@@ -245,6 +266,7 @@ class MonteCarloSimulator(object):
 
         binomial_iterations = 10  # good trade off between accuracy and time
         stock_price_resolution = 100  # height of matrix
+        debug = False
 
         print(f'Mode: {mode} Iterations: {binomial_iterations}')
 
@@ -280,61 +302,54 @@ class MonteCarloSimulator(object):
             min_stock, max_stock = simulated_stock_prices.min(), simulated_stock_prices.max()
             if type(min_stock) is pd.Series:
                 min_stock, max_stock = min_stock.min(), max_stock.max()
-        else:
+        elif False:
             min_stock = max(0.01, current_stock_price/10)
             max_stock = current_stock_price*2
+        else:
+            min_stock = max(0, current_stock_price - 3*option_strat.positions.expected_move)
+            max_stock = current_stock_price + 3*option_strat.positions.expected_move
 
         stock_price_increment = (max_stock - min_stock) / (stock_price_resolution+1)
 
         print(f'Min stock: {min_stock}, Max stock: {max_stock}, Increment: {stock_price_increment}')
 
-        # (stock_price_res+1) * (first_dte+1) entries
-        strat_gains = [CustomDict(
-            {round(min_stock + i * stock_price_increment, 2): 0 for i in range(stock_price_resolution+1)})
-            for _ in range(first_dte)]
+        @timeit
+        def precompute_strat_gains():
+            # (stock_price_res+1) * (first_dte+1) entries
+            _strat_gains = [CustomDict(
+                {round(min_stock + i * stock_price_increment, 2): 0 for i in range(stock_price_resolution+1)})
+                for _ in range(first_dte)]
 
-        # precompute gains for certain u_prices and until first expiration
-        for day in range(len(strat_gains)):  # iterate over days
-            for stock_price in list(strat_gains[day].keys()):
+            # precompute gains for certain u_prices and until first expiration
+            for day in range(len(_strat_gains)):  # iterate over days
+                for stock_price in list(_strat_gains[day].keys()):
 
-                strat_gains[day][stock_price] = \
-                    option_strat.positions.get_profit_n_dte(first_dte-day, stock_price, risk_free_rate)
+                    _strat_gains[day][stock_price] = \
+                        option_strat.positions.get_profit_n_dte(first_dte-day, stock_price, risk_free_rate)
 
-                """
-                # all leg gains + stock gains at that day with that stock price
-                strat_gains[day][stock_price] += sum([(
-                    EuroOption(stock_price,
-                          leg.asset.strike,
-                          risk_free_rate,
-                          (len(strat_gains) - day) / 365.0,  # dte then
+            return _strat_gains
 
-                          binomial_iterations,
-                          {'is_call': leg.asset.opt_type == "c",
-                           'eu_option': False,
-                           'sigma': leg.asset.iv}).price() * 100
-                     - abs(leg.cost)) * (1 if leg.cost > 0 else -1)
-                     for leg in legs]) + (stock_price - current_stock_price) * stock_quantity
-                     """
+        strat_gains = precompute_strat_gains()
 
-        pp(strat_gains[first_dte-1].items())
-
-        """
-        # todo debug plotting
-        # todo draw zero in different color for break even line over time&price
-        '''plt.contourf(
-            [round(min_stock + i * stock_price_increment, 2) for i in range(stock_price_resolution+1)],
-            [d for d in range(first_dte)],
-            [[strat_gains[d][i] for i in range(stock_price_resolution+1)] for d in range(first_dte)],
-
-            list(np.linspace(int(-option_strat.positions.risk), int(option_strat.positions.max_profit),
-                             int(20*(option_strat.positions.max_profit+option_strat.positions.risk)))),
-            extend="both",
-            cmap=plt.cm.get_cmap("plasma"))'''
-        plt.imshow([[strat_gains[d][i] for i in range(stock_price_resolution+1)] for d in range(first_dte)],
-                   cmap=plt.cm.get_cmap("plasma"), aspect="auto", origin="lower")
-        plt.xticks(list(strat_gains[0].keys()))
-        plt.show()
-        #"""
+        if with_plots:
+            pp(strat_gains[first_dte - 1].items())
+            #"""
+            # todo debug plotting
+            # todo draw zero in different color for break even line over time&price
+            plt.contourf(
+                [round(min_stock + i * stock_price_increment, 2) for i in range(stock_price_resolution+1)],
+                [d for d in range(first_dte)],
+                [[strat_gains[d][i] for i in range(stock_price_resolution+1)] for d in range(first_dte)],
+    
+                list(np.linspace(int(-option_strat.positions.risk), int(option_strat.positions.max_profit),
+                                 int(20*(option_strat.positions.max_profit+option_strat.positions.risk)))),
+                extend="neither",
+                cmap=plt.cm.get_cmap("plasma"))
+            #plt.imshow([[strat_gains[d][i] for i in range(stock_price_resolution+1)] for d in range(first_dte)],
+            #           cmap=plt.cm.get_cmap("plasma"), aspect="auto", origin="lower")
+            plt.xticks(list(strat_gains[0].keys()))
+            plt.show()
+            #"""
 
         # now we track the paths of mc simulations along strat_gains
 
@@ -347,7 +362,7 @@ class MonteCarloSimulator(object):
         sl_hit_days_b4_close = 0
 
         gains_at_day = [[0 for _ in range(iterations)] for _ in range(first_dte)]
-        anomaly_day = -1
+        anomaly_day = 0
 
         for d in range(first_dte):  # iterate over days, day 0 is now, day 1 is todays close etc
 
@@ -365,7 +380,7 @@ class MonteCarloSimulator(object):
                     continue
 
                 if tp_hits_this_day > 150:
-                    print(f'TP hits on day {d}: {tp_hits_this_day}')
+                    # print(f'TP hits on day {d}: {tp_hits_this_day}')
                     anomaly_day = d
 
                 sim_stock_price = round_cut(sim_stock_price, 2)  # random.randint(0, 50)
@@ -373,6 +388,7 @@ class MonteCarloSimulator(object):
                 try:
                     gain = strat_gains[d][sim_stock_price]
                 except KeyError:
+                    print("key error")
                     gain = option_strat.positions.get_profit_n_dte(first_dte-d, sim_stock_price, risk_free_rate)
 
                 gains_at_day[d][i] = gain
@@ -396,7 +412,7 @@ class MonteCarloSimulator(object):
                         sl_hit_days_b4_close += 1
                     continue
 
-            if tp_hit_days > 0 and (tp_hit_days-tp_hits_b4) / tp_hit_days > 0.30:
+            if False and tp_hit_days > 0 and (tp_hit_days-tp_hits_b4) / tp_hit_days > 0.30:
                 # hit more than 10% of TPs today alone
                 print(f'Weird day: d={d},'
                       f'\n\tAvg gain: {sum([gains_at_day[d][i] for i in range(iterations)])/iterations},'
@@ -414,52 +430,51 @@ class MonteCarloSimulator(object):
         print(f'Gains at close >0 in {sum([1 for x in gains_at_close if x > 0])} cases')
         """
 
-        bin_size = 1
-        bins = [i for i in range(int((max_stock/bin_size) + 1))]
-        print(f'Anomaly day: {anomaly_day}')
-        #print(f'Prices on anomaly day:\n{sorted(simulated_stock_prices.loc[anomaly_day, :])}')
-        anomaly_bins = \
-            [sum([1 for p in simulated_stock_prices.loc[anomaly_day, :] if i * bin_size <= p < (i + 1) * bin_size])
-             for i in bins]
-        comp_bins = \
-            [sum([1 for p in simulated_stock_prices.loc[anomaly_day+3, :] if i * bin_size <= p < (i + 1) * bin_size])
-             for i in bins]
-        plt.plot(bins, anomaly_bins)
-        plt.plot(bins, comp_bins)
-        plt.show()
+        if with_plots:
+            bin_size = 1
+            bins = [i for i in range(int((max_stock/bin_size) + 1))]
+            print(f'Anomaly day: {anomaly_day}')
+            anomaly_bins = \
+                [sum([1 for p in simulated_stock_prices.loc[anomaly_day, :] if i * bin_size <= p < (i + 1) * bin_size])
+                 for i in bins]
+            comp_bins = \
+                [sum([1 for p in simulated_stock_prices.loc[anomaly_day+3, :] if i * bin_size <= p < (i + 1) * bin_size])
+                 for i in bins]
+            plt.bar(bins, anomaly_bins)
+            plt.bar(bins, comp_bins)
+            plt.show()
 
-
-        #"""
-        #plt.imshow(gains_at_day, aspect="auto", origin="lower", cmap=plt.cm.get_cmap("plasma"))
-        plt.contourf(
-            [i for i in range(iterations)],
-            [d for d in range(first_dte)],
-            [[gains_at_day[d][i] for i in range(iterations)] for d in range(first_dte)],
-
-            list(np.linspace(int(-option_strat.positions.risk), int(option_strat.positions.max_profit),
-                             int(20 * (option_strat.positions.max_profit + option_strat.positions.risk)))),
-            cmap=plt.cm.get_cmap("plasma"))
-        plt.show()
-        #"""
-
-        df = pd.DataFrame(gains_at_day)
-        print("...")
+        if with_plots:
+            # """
+            # plt.imshow(gains_at_day, aspect="auto", origin="lower", cmap=plt.cm.get_cmap("plasma"))
+            plt.contourf(
+                [i for i in range(iterations)],
+                [d for d in range(first_dte)],
+                [[gains_at_day[d][i] for i in range(iterations)] for d in range(first_dte)],
+                list(np.linspace(int(-option_strat.positions.risk), int(option_strat.positions.max_profit),
+                                 int(20 * (option_strat.positions.max_profit + option_strat.positions.risk)))),
+                cmap=plt.cm.get_cmap("plasma"),
+                extend="neither"
+            )
+            plt.show()
+            #"""
 
         # todo weight green curve with respective probs to get an expected value curve
 
-        #"""
-        # summed prob of hitting tp up to this day (inclusive)
-        plt.plot(range(first_dte),
-                 [100*sum([1 for x in tp_hit_days_list if x <= d])/iterations for d in range(first_dte)])
-        # % of tp hits on each day
-        plt.plot(range(first_dte),
-                 [100*sum([1 for x in tp_hit_days_list if x == d])/(tp_hit_days+0.01) for d in range(first_dte)])
-        # avg gains on this day
-        plt.plot(range(first_dte),
-                 [sum([gains_at_day[d][i] for i in range(iterations)])/iterations for d in range(first_dte)])
-        plt.plot([close_days, close_days], [0, 50])
-        plt.show()
-        #"""
+        if with_plots:
+            #"""
+            # summed prob of hitting tp up to this day (inclusive)
+            plt.plot(range(first_dte),
+                     [100*sum([1 for x in tp_hit_days_list if x <= d])/iterations for d in range(first_dte)])
+            # % of tp hits on each day
+            plt.plot(range(first_dte),
+                     [100*sum([1 for x in tp_hit_days_list if x == d])/(tp_hit_days+0.01) for d in range(first_dte)])
+            # avg gains on this day
+            plt.plot(range(first_dte),
+                     [sum([gains_at_day[d][i] for i in range(iterations)])/iterations for d in range(first_dte)])
+            plt.plot([close_days, close_days], [0, 50])
+            plt.show()
+            #"""
 
         if tp_hit_days_list:
             tp_d_avg = sum(tp_hit_days_list) / len(tp_hit_days_list)
@@ -468,19 +483,21 @@ class MonteCarloSimulator(object):
             tp_d_med = -1
             tp_d_avg = -1
 
-        print(f' Gains at close > 0: {sum([1 for x in gains_at_close if x > 0])},\n'
-              f'   TP hits b4 close: {tp_hit_days_b4_close}\n'
-              f'   SL hits b4 close: {sl_hit_days_b4_close}\n'
-              f' Gains at close len: {len(gains_at_close)}')
         close_pop = (sum([1 for x in gains_at_close if x > 0]) + tp_hit_days_b4_close - sl_hit_days_b4_close) / \
                     (len(gains_at_close) + tp_hit_days_b4_close + sl_hit_days_b4_close)
-        print(f'          Close PoP: {close_pop}\n')
-        print(f'Gains >= TP of {tp}: {sum([1 for x in gains_at_close if x >= tp])},\n'
-              f'   TP hits b4 close: {tp_hit_days_b4_close}\n'
-              f' Gains at close len: {len(gains_at_close)}')
         close_pn = (sum([1 for x in gains_at_close if x >= tp]) + tp_hit_days_b4_close) / \
                    (len(gains_at_close) + tp_hit_days_b4_close)
-        print(f'           Close PN: {close_pn}\n')
+
+        if debug:
+            print(f' Gains at close > 0: {sum([1 for x in gains_at_close if x > 0])},\n'
+                  f'   TP hits b4 close: {tp_hit_days_b4_close}\n'
+                  f'   SL hits b4 close: {sl_hit_days_b4_close}\n'
+                  f' Gains at close len: {len(gains_at_close)}')
+            print(f'          Close PoP: {close_pop}\n')
+            print(f'Gains >= TP of {tp}: {sum([1 for x in gains_at_close if x >= tp])},\n'
+                  f'   TP hits b4 close: {tp_hit_days_b4_close}\n'
+                  f' Gains at close len: {len(gains_at_close)}')
+            print(f'           Close PN: {close_pn}\n')
 
         return tp_hit_days / iterations, sl_hit_days / iterations, tp_d_med, tp_d_avg, close_pop, close_pn
 
@@ -514,10 +531,9 @@ class MonteCarloSimulator(object):
         })
 
 
-if __name__ == "main":
+if __name__ == "__main__":
     pd.set_option('display.float_format', lambda x: '%.8f' % x)
-    mcs = MonteCarloSimulator(["abt"])
-    # print(mcs.p_greater_n_end("expr", 4))
-    print(mcs.get_pop_pn_sl_old("abt", opt_price=0.30, delta=-0.29, gamma=0.23, theta=-0.00578,
-                                tp=0.15, sl=-0.10, days=44))
+    mcs = MonteCarloSimulator(["amc"])
+    mcs.plot_simulated_prices("amc")
+
 

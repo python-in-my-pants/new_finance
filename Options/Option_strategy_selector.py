@@ -15,7 +15,7 @@ from typing import Optional, Callable, List, Dict, Union, Any, Tuple, Iterable
 from yahoo_fin import stock_info as si
 from DDict import DDict
 from MonteCarlo import MonteCarloSimulator
-from time import time
+import time
 import pathlib
 from Option import Option
 from Option_utility import *
@@ -2236,7 +2236,7 @@ class CombinedPosition:
                                                                                      dte / 365.0,
                                                                                      risk_free_rate,
                                                                                      leg.asset.iv)
-                else:
+                elif mode == "binomial":
                     future_leg_price = EuroOption(stock_price,
                                                   leg.asset.strike,
                                                   risk_free_rate,
@@ -2245,6 +2245,8 @@ class CombinedPosition:
                                                   {'is_call': leg.asset.opt_type == "c",
                                                    'eu_option': False,
                                                    'sigma': leg.asset.iv}).price()
+                else:
+                    raise NotImplementedError("Allowed modes are 'binomial' and 'bjerksund'")
 
                 if leg.cost >= 0:
                     leg_gain = future_leg_price*100 - leg.cost
@@ -2263,9 +2265,6 @@ class CombinedPosition:
             leg_gains += leg_gain
 
         leg_gains += (stock_price - self.u_ask) * self.stock.quantity
-        if leg_gains > 60:
-            #print(f'Gain: {leg_gains}, stock price: {stock_price}, Long gain: {long_gain}, Short gain: {short_gain}')
-            ...
         return round_cut(leg_gains, 2)
 
     def add_asset(self, asset, quantity, no_update=False):
@@ -3663,7 +3662,7 @@ class CustomStratGenerator:
                                 self.prob_of_profit = -1
                             """
 
-                            # check other specific conditions here
+                            # check other specific conditions here6
 
                             def position_builder_function() -> CombinedPosition:
                                 return comb_pos
@@ -3791,7 +3790,7 @@ def model_test():
     is_call = opt_type == "c"
     iv = 1.3
 
-    start = time()
+    start = time.time()
 
     binomial_iterations = 10
 
@@ -3809,9 +3808,9 @@ def model_test():
 
     binom_price = sum([a() for _ in range(10000)]) / 10000
 
-    print(f'            Binomial took {time() - start:.8f} seconds: {binom_price}')
+    print(f'            Binomial took {time.time() - start:.8f} seconds: {binom_price}')
 
-    start2 = time()
+    start2 = time.time()
 
     def b():
         opt_price, _, delta, gamma, theta, vega, rho = get_greeks(opt_type,
@@ -3824,7 +3823,7 @@ def model_test():
 
     opt_price = sum([b() for _ in range(10000)]) / 10000
 
-    print(f'Bjerksund-Strensland took {time() - start2:.8f} seconds: {opt_price}')
+    print(f'Bjerksund-Strensland took {time.time() - start2:.8f} seconds: {opt_price}')
 
 
 def test_greeks():
