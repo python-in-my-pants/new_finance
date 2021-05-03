@@ -347,6 +347,7 @@ class MonteCarloSimulator(object):
         sl_hit_days_b4_close = 0
 
         gains_at_day = [[0 for _ in range(iterations)] for _ in range(first_dte)]
+        anomaly_day = -1
 
         for d in range(first_dte):  # iterate over days, day 0 is now, day 1 is todays close etc
 
@@ -365,7 +366,7 @@ class MonteCarloSimulator(object):
 
                 if tp_hits_this_day > 150:
                     print(f'TP hits on day {d}: {tp_hits_this_day}')
-                    ...
+                    anomaly_day = d
 
                 sim_stock_price = round_cut(sim_stock_price, 2)  # random.randint(0, 50)
 
@@ -413,8 +414,20 @@ class MonteCarloSimulator(object):
         print(f'Gains at close >0 in {sum([1 for x in gains_at_close if x > 0])} cases')
         """
 
-        df = pd.DataFrame(gains_at_day)
-        print(df.head())
+        bin_size = 1
+        bins = [i for i in range(int((max_stock/bin_size) + 1))]
+        print(f'Anomaly day: {anomaly_day}')
+        #print(f'Prices on anomaly day:\n{sorted(simulated_stock_prices.loc[anomaly_day, :])}')
+        anomaly_bins = \
+            [sum([1 for p in simulated_stock_prices.loc[anomaly_day, :] if i * bin_size <= p < (i + 1) * bin_size])
+             for i in bins]
+        comp_bins = \
+            [sum([1 for p in simulated_stock_prices.loc[anomaly_day+3, :] if i * bin_size <= p < (i + 1) * bin_size])
+             for i in bins]
+        plt.plot(bins, anomaly_bins)
+        plt.plot(bins, comp_bins)
+        plt.show()
+
 
         #"""
         #plt.imshow(gains_at_day, aspect="auto", origin="lower", cmap=plt.cm.get_cmap("plasma"))
@@ -428,6 +441,9 @@ class MonteCarloSimulator(object):
             cmap=plt.cm.get_cmap("plasma"))
         plt.show()
         #"""
+
+        df = pd.DataFrame(gains_at_day)
+        print("...")
 
         # todo weight green curve with respective probs to get an expected value curve
 
