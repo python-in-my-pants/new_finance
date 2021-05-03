@@ -1,7 +1,23 @@
+from bisect import bisect_left
+
+
 class CustomDict(dict):
 
     def __getitem__(self, item):
-        for i, index in enumerate(self.keys()):
-            if index >= item:
-                return list(self.values())[i]
-        raise KeyError(f'No value greater or equal to {item} found in OrderedMap')
+
+        values = list(self.keys())
+        pos = bisect_left(values, item)
+
+        if pos == 0:
+            return values[0]
+        if pos == len(values):
+            return values[-1]
+        before = values[pos - 1]
+        after = values[pos]
+        if after - item < item - before:
+            return list(self.values())[pos]
+        else:
+            if item - before > after - before:
+                # if item is very big and thus very wide out of range, better not return anything
+                raise KeyError
+            return list(self.values())[pos-1]

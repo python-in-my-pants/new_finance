@@ -38,7 +38,7 @@ debug_level = 1
 ACCOUNT_BALANCE = 1471
 DEFAULT_THRESHOLD = 0.3
 
-np.seterr(all='raise')
+#np.seterr(all='raise')
 
 
 # <editor-fold desc="Miscellaneous">
@@ -290,9 +290,9 @@ def get_option_chain(yf_obj, u_ask, save=True, min_vol=0):
     # ... impliedVolatility  inTheMoney contractSize currency
 
     start = datetime.now()
+    current_path = pathlib.Path().absolute().as_posix()
 
-    if os.path.isfile("C:\\Users\\User\\PycharmProjects\\Finance\\Options\\chains\\"
-                      + yf_obj.ticker + "_chain.pickle") and not force_chain_download:  # if not get_chain:
+    if os.path.isfile(current_path + "\\chains\\" + yf_obj.ticker + "_chain.pickle") and not force_chain_download:  # if not get_chain:
         return OptionChain.from_file(filename=yf_obj.ticker + "_chain").volume(min_vol)
 
     option_chain = DDict()
@@ -784,6 +784,7 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
         for pos in proposed_strategies:
             if pos.positions:
                 print(pos)
+                return
                 # pos.positions.plot_profit_dist_on_first_exp()
 
 
@@ -1861,7 +1862,7 @@ class CombinedPosition:
                f'\n' \
                f'{indent}                Half profit: {self.max_profit / 2:+6.2f} $' \
                f'\n' \
-               f'{indent}Return on margin (TP @ 50%): {self.rom * 100:.2f} %' \
+               f'{indent}Return on margin (TP @ 50%): {self.rom * 100:.2f}%' \
                f'\n\n'
 
     def detail(self, t=0):
@@ -2209,6 +2210,63 @@ class CombinedPosition:
 
     def get_cost(self):
         return sum([pos.cost for pos in self.pos_dict.values()])
+
+    def get_profit_n_dte(self, dte, stock_price, risk_free_rate, binomial_iterations=5, mode="bjerksund"):
+        """
+
+        :param dte: 0 = now, 1 = todays EOD, 2 = tomorrows EOD, etc.
+        :param stock_price:
+        :param risk_free_rate:
+        :param binomial_iterations:
+        :param mode:
+        :return:
+        """
+
+        legs = [pos for pos in list(self.pos_dict.values()) if type(pos.asset) is Option]
+
+        leg_gains = 0
+        short_gain = 0
+        long_gain = 0
+        for leg in legs:
+            if dte > 0:
+                if mode == "bjerksund":
+                    future_leg_price, _, delta, gamma, theta, vega, rho = get_greeks(leg.asset.opt_type,
+                                                                                     stock_price,
+                                                                                     leg.asset.strike,
+                                                                                     dte / 365.0,
+                                                                                     risk_free_rate,
+                                                                                     leg.asset.iv)
+                else:
+                    future_leg_price = EuroOption(stock_price,
+                                                  leg.asset.strike,
+                                                  risk_free_rate,
+                                                  dte / 365.0,  # dte then
+                                                  binomial_iterations,
+                                                  {'is_call': leg.asset.opt_type == "c",
+                                                   'eu_option': False,
+                                                   'sigma': leg.asset.iv}).price()
+
+                if leg.cost >= 0:
+                    leg_gain = future_leg_price*100 - leg.cost
+                    long_gain = leg_gain
+                else:  # short leg
+                    leg_gain = -(future_leg_price*100 + leg.cost)
+                    short_gain = leg_gain
+
+            elif dte == 0:
+                profit_dist = self.pos_dict[leg.asset.name].get_profit_dist_at_exp(max_strike=int(stock_price) + 1)
+
+                leg_gain = profit_dist[int(stock_price * 100)]
+            else:
+                raise RuntimeError("Negative DTE encountered in get_profit_n_dte")
+
+            leg_gains += leg_gain
+
+        leg_gains += (stock_price - self.u_ask) * self.stock.quantity
+        if leg_gains > 60:
+            #print(f'Gain: {leg_gains}, stock price: {stock_price}, Long gain: {long_gain}, Short gain: {short_gain}')
+            ...
+        return round_cut(leg_gains, 2)
 
     def add_asset(self, asset, quantity, no_update=False):
         """
@@ -3675,6 +3733,53 @@ def get_market_recommendations(ticker_f, start_from=None):
 # theta for long call is huge, is this correct?
 
 
+def binom_test():
+    # EuroOption.price() is best with 5-10 iterations, 1s for 10k iterations
+
+    opt_type = "c"
+    u_price = 11.67
+    strike = 8.5
+    dte_then = 40
+    risk_free_rate = 0.02
+    is_call = opt_type == "c"
+    iv = 1.3
+
+    binomial_iterations = 50
+
+    def a():
+        return EuroOption(u_price,
+                          strike,
+                          risk_free_rate,
+                          dte_then / 365.0,
+
+                          binomial_iterations,
+                          {'is_call': is_call,
+                           'eu_option': False,
+                           'sigma': iv}) \
+            .price()
+
+    def b():
+        opt_price, _, delta, gamma, theta, vega, rho = get_greeks(opt_type,
+                                                                  u_price,
+                                                                  strike,
+                                                                  max(dte_then / 365.0, 0.001),
+                                                                  risk_free_rate,
+                                                                  iv)
+        return opt_price
+
+    prices = []
+    prices_b = []
+    initial_dte = dte_then
+    for i in range(initial_dte-1):
+        dte_then -= 1
+        prices.append(a())
+        prices_b.append(b())
+
+    plt.plot(range(len(prices)), prices)
+    plt.plot(range(len(prices_b)), prices_b)
+    plt.show()
+
+
 def model_test():
     # EuroOption.price() is best with 5-10 iterations, 1s for 10k iterations
 
@@ -3779,7 +3884,7 @@ if __name__ == "__main__":
         "risk": ("le", 100),
         "delta": ("lt", 0)
     }
-    # """
+    #"""
     propose_strategies(t,
                        StrategyConstraints(strict_mode=False,
                                            min_oi30=1000,
@@ -3789,7 +3894,10 @@ if __name__ == "__main__":
                        auto=False,
                        use_predefined_strats=False,
                        single_strat_cons=ssc,
-                       filters=[[OptionChain.volume, 50]])
+                       filters=[[OptionChain.volume, 50],
+                                [OptionChain.expiration_close_to_dte, 45]])
     # """
 
     # get_market_recommendations(get_trending_theta_strat_tickers)
+
+    #binom_test()

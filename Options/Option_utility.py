@@ -3,6 +3,12 @@ from datetime import datetime, date, timedelta
 import time
 
 
+def round_cut(x, n=0):
+    if x == 0:
+        return 0
+    return x / abs(x) * int(abs(x) * 10 ** n - 0.5) / 10 ** n
+
+
 def get_timestamp():
     ts = time.time()
     return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')

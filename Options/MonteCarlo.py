@@ -10,7 +10,11 @@ from eu_option import EuroOption
 from CustomDict import CustomDict
 from Utility import timeit, median
 from Option import Option
-from Option_utility import datetime_to_dte
+from Option_utility import datetime_to_dte, round_cut
+from option_greeks import get_greeks
+import matplotlib.pyplot as plt
+import random
+from pprint import pprint as pp
 
 
 class MonteCarloSimulator(object):
@@ -223,7 +227,8 @@ class MonteCarloSimulator(object):
             # todo complex curves like butterflies & condors & such
             return -1
 
-    def get_pn_psl(self, option_strat, risk_free_rate) -> [float, float]:
+    @timeit
+    def get_pn_psl(self, option_strat, risk_free_rate, force_iterations=None, mode="bjerksund") -> [float, float, int, int, float, float]:
         """
         TODO use bid/ask dependent on long/short leg, so the spread is incorporated into the calc
          -> already done by assuming fill at nat instead of mid, we pay the full spread on entry
@@ -238,23 +243,19 @@ class MonteCarloSimulator(object):
         # ################################################################################################# #
         # constants
 
-        def round_cut(x, n=0):
-            if x == 0:
-                return 0
-            return x / abs(x) * int(abs(x) * 10 ** n - 0.5) / 10 ** n
+        binomial_iterations = 10  # good trade off between accuracy and time
+        stock_price_resolution = 100  # height of matrix
 
-        binomial_iterations = 5  # good tradeoff between accuracy and time
-        stock_price_resolution = 60  # height of matrix
+        print(f'Mode: {mode} Iterations: {binomial_iterations}')
 
         # ################################################################################################# #
 
         first_dte = option_strat.positions.dte_until_first_exp()+1
         close_days = datetime_to_dte(option_strat.close_date)+1
-        legs = [pos for pos in list(option_strat.positions.pos_dict.values()) if type(pos.asset) is Option]
+        print(f'First dte: {first_dte}, close days: {close_days}')
         ticker = option_strat.env_container.ticker
         imp_vol = option_strat.env_container.env.IV
         current_stock_price = option_strat.env_container.u_ask
-        stock_quantity = option_strat.positions.stock.quantity
 
         tp = option_strat.tp_percentage / 100 * option_strat.positions.max_profit
         if option_strat.sl_percentage >= 100:
@@ -263,7 +264,10 @@ class MonteCarloSimulator(object):
             sl = -option_strat.sl_percentage / 100 * option_strat.positions.risk
 
         # 0 day is now, 1 day is end of today, 2 days is end of tomorrow etc
-        simulated_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[:first_dte+1, 1:]
+        if force_iterations:
+            simulated_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[:first_dte, 1:force_iterations+1]
+        else:
+            simulated_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[:first_dte, 1:]
         iterations = len(simulated_stock_prices.iloc[0, :])
 
         if False and imp_vol > 0:  # todo remove 'false' if iv is overstated in monte carlo
@@ -271,54 +275,30 @@ class MonteCarloSimulator(object):
             deviation = (first_dte+1)/365.0 * imp_vol * current_stock_price
             min_stock = max(option_strat.env_container.u_ask - deviation, 0.01)
             max_stock = option_strat.env_container.u_ask + deviation
-        else:
+        elif True:
             # option 1: use min & max from monte sim_stock_prices
             min_stock, max_stock = simulated_stock_prices.min(), simulated_stock_prices.max()
             if type(min_stock) is pd.Series:
                 min_stock, max_stock = min_stock.min(), max_stock.max()
+        else:
+            min_stock = max(0.01, current_stock_price/10)
+            max_stock = current_stock_price*2
 
-        stock_price_increment = min((max_stock - min_stock) / stock_price_resolution, 1)
+        stock_price_increment = (max_stock - min_stock) / (stock_price_resolution+1)
+
+        print(f'Min stock: {min_stock}, Max stock: {max_stock}, Increment: {stock_price_increment}')
 
         # (stock_price_res+1) * (first_dte+1) entries
         strat_gains = [CustomDict(
             {round(min_stock + i * stock_price_increment, 2): 0 for i in range(stock_price_resolution+1)})
-            for _ in range(first_dte+1)]
+            for _ in range(first_dte)]
 
         # precompute gains for certain u_prices and until first expiration
         for day in range(len(strat_gains)):  # iterate over days
             for stock_price in list(strat_gains[day].keys()):
 
-                # This is a for-version of below list comprehension
-                
-                leg_gains = 0
-                for leg in legs:
-                    if first_dte - day > 0:
-                        future_leg_price = EuroOption(stock_price,
-                                                      leg.asset.strike,
-                                                      risk_free_rate,
-                                                      (first_dte - day) / 365.0,  # dte then
-
-                                                      binomial_iterations,
-                                                      {'is_call': leg.asset.opt_type == "c",
-                                                       'eu_option': False,
-                                                       'sigma': leg.asset.iv}).price()
-                    elif first_dte - day == 0:
-                        profit_dist = option_strat.positions.pos_dict[leg.asset.name]\
-                            .get_profit_dist_at_exp(max_strike=int(stock_price)+1)
-
-                        future_leg_price = profit_dist[int(stock_price*100)]
-                    else:
-                        raise RuntimeError("Negative DTE encountered in get_pn_sl")
-
-                    leg_gain = round_cut(abs(future_leg_price*100 - leg.cost), 2)
-
-                    if leg.cost < 0:  # short leg
-                        leg_gain = -leg_gain
-
-                    leg_gains += leg_gain
-
-                leg_gains += (stock_price - current_stock_price) * stock_quantity
-                strat_gains[day][stock_price] = round_cut(leg_gains, 2)
+                strat_gains[day][stock_price] = \
+                    option_strat.positions.get_profit_n_dte(first_dte-day, stock_price, risk_free_rate)
 
                 """
                 # all leg gains + stock gains at that day with that stock price
@@ -336,6 +316,26 @@ class MonteCarloSimulator(object):
                      for leg in legs]) + (stock_price - current_stock_price) * stock_quantity
                      """
 
+        pp(strat_gains[first_dte-1].items())
+
+        """
+        # todo debug plotting
+        # todo draw zero in different color for break even line over time&price
+        '''plt.contourf(
+            [round(min_stock + i * stock_price_increment, 2) for i in range(stock_price_resolution+1)],
+            [d for d in range(first_dte)],
+            [[strat_gains[d][i] for i in range(stock_price_resolution+1)] for d in range(first_dte)],
+
+            list(np.linspace(int(-option_strat.positions.risk), int(option_strat.positions.max_profit),
+                             int(20*(option_strat.positions.max_profit+option_strat.positions.risk)))),
+            extend="both",
+            cmap=plt.cm.get_cmap("plasma"))'''
+        plt.imshow([[strat_gains[d][i] for i in range(stock_price_resolution+1)] for d in range(first_dte)],
+                   cmap=plt.cm.get_cmap("plasma"), aspect="auto", origin="lower")
+        plt.xticks(list(strat_gains[0].keys()))
+        plt.show()
+        #"""
+
         # now we track the paths of mc simulations along strat_gains
 
         done_iterations = set()
@@ -344,85 +344,64 @@ class MonteCarloSimulator(object):
         tp_hit_days_b4_close = 0
         sl_hit_days = 0
         gains_at_close = []
-        for d in range(first_dte+1):  # iterate over days, day 0 is now, day 1 is todays close etc
+        sl_hit_days_b4_close = 0
+
+        gains_at_day = [[0 for _ in range(iterations)] for _ in range(first_dte)]
+
+        for d in range(first_dte):  # iterate over days, day 0 is now, day 1 is todays close etc
 
             # only go while there are undecided iterations left (tp hit / sl hit?)
             if tp_hit_days+sl_hit_days >= iterations:
                 break
 
-            for i, sim_stock_price in enumerate(simulated_stock_prices.iloc[d, :]):  # iterate over iterations
+            tp_hits_b4 = tp_hit_days
+            tp_hits_this_day = 0
+
+            for i, sim_stock_price in enumerate(sorted(simulated_stock_prices.iloc[d, :].to_list())): # iterate over iterations
 
                 # result of this iteration is already clear
                 if i in done_iterations:
                     continue
 
-                sim_stock_price = round_cut(sim_stock_price, 2)
+                if tp_hits_this_day > 150:
+                    print(f'TP hits on day {d}: {tp_hits_this_day}')
+                    ...
 
-                if first_dte - d > 0:
-                    try:
-                        gain = strat_gains[d][sim_stock_price]
-                    except KeyError:
+                sim_stock_price = round_cut(sim_stock_price, 2)  # random.randint(0, 50)
 
-                        # calc missing value manually
-                        leg_gains = 0
-                        for leg in legs:
-                            future_leg_price = EuroOption(sim_stock_price,
-                                                          leg.asset.strike,
-                                                          risk_free_rate,
-                                                          (first_dte - d) / 365.0,  # dte then
+                try:
+                    gain = strat_gains[d][sim_stock_price]
+                except KeyError:
+                    gain = option_strat.positions.get_profit_n_dte(first_dte-d, sim_stock_price, risk_free_rate)
 
-                                                          binomial_iterations,
-                                                          {'is_call': leg.asset.opt_type == "c",
-                                                           'eu_option': False,
-                                                           'sigma': leg.asset.iv}).price()
-
-                            leg_gain = abs(future_leg_price * 100 - leg.cost)
-
-                            if leg.cost < 0:  # short leg, invert profit
-                                leg_gain = -leg_gain
-
-                            leg_gains += leg_gain
-
-                        leg_gains += (sim_stock_price - current_stock_price) * stock_quantity
-                        gain = leg_gains
-
-                        """###########################
-                        gain = sum([(EuroOption(sim_stock_price,
-                                                leg.asset.strike,
-                                                risk_free_rate,
-                                                (first_dte - d) / 365.0,  # dte then
-
-                                                binomial_iterations,
-                                                {'is_call': leg.asset.opt_type == "c",
-                                                 'eu_option': False,
-                                                 'sigma': leg.asset.iv}).price() * 100
-                                     - abs(leg.cost)) * (1 if leg.cost > 0 else -1)
-                                    for leg in legs]) + (sim_stock_price - current_stock_price) * stock_quantity"""
-
-                elif first_dte - d == 0:
-                    # todo beware, this may give wrong profit values for extremely high underlying prices
-                    index = max(0, min(int(sim_stock_price*100), len(option_strat.positions.profit_dist_at_first_exp)-1))
-                    gain = option_strat.positions.profit_dist_at_first_exp[index]
-                else:
-                    raise RuntimeError("Negative DTE encountered in get_pn_sl")
-
-                gain = round(gain, 2)
+                gains_at_day[d][i] = gain
 
                 if close_days == d:
                     gains_at_close.append(gain)
 
                 if gain >= tp:
+                    tp_hits_this_day += 1
                     done_iterations.add(i)
                     tp_hit_days += 1
                     tp_hit_days_list.append(d)
-                    if d <= first_dte:
+                    if d < close_days:  # has to be < instead of <= bc for close pop, we already count gains_at_close,
+                        # otherwise tp hits on close day would be counted twice
                         tp_hit_days_b4_close += 1
                     continue
                 if gain <= sl:
                     done_iterations.add(i)
                     sl_hit_days += 1
+                    if d < close_days:
+                        sl_hit_days_b4_close += 1
                     continue
 
+            if tp_hit_days > 0 and (tp_hit_days-tp_hits_b4) / tp_hit_days > 0.30:
+                # hit more than 10% of TPs today alone
+                print(f'Weird day: d={d},'
+                      f'\n\tAvg gain: {sum([gains_at_day[d][i] for i in range(iterations)])/iterations},'
+                      f'\n\tAvg price: {sum(simulated_stock_prices.loc[d, :].to_list())/iterations}')
+
+        """
         long_dir = option_strat.positions.max_profit_point > option_strat.positions.break_even
         cases = sum([1 for x in simulated_stock_prices.iloc[close_days, :] if x > option_strat.positions.break_even]) \
             if long_dir else \
@@ -432,6 +411,39 @@ class MonteCarloSimulator(object):
         print(f'Stock price {"above" if long_dir else "below"} {option_strat.positions.break_even} @ exp in {cases} '
               f'cases bc max_profit u is {option_strat.positions.max_profit_point}')
         print(f'Gains at close >0 in {sum([1 for x in gains_at_close if x > 0])} cases')
+        """
+
+        df = pd.DataFrame(gains_at_day)
+        print(df.head())
+
+        #"""
+        #plt.imshow(gains_at_day, aspect="auto", origin="lower", cmap=plt.cm.get_cmap("plasma"))
+        plt.contourf(
+            [i for i in range(iterations)],
+            [d for d in range(first_dte)],
+            [[gains_at_day[d][i] for i in range(iterations)] for d in range(first_dte)],
+
+            list(np.linspace(int(-option_strat.positions.risk), int(option_strat.positions.max_profit),
+                             int(20 * (option_strat.positions.max_profit + option_strat.positions.risk)))),
+            cmap=plt.cm.get_cmap("plasma"))
+        plt.show()
+        #"""
+
+        # todo weight green curve with respective probs to get an expected value curve
+
+        #"""
+        # summed prob of hitting tp up to this day (inclusive)
+        plt.plot(range(first_dte),
+                 [100*sum([1 for x in tp_hit_days_list if x <= d])/iterations for d in range(first_dte)])
+        # % of tp hits on each day
+        plt.plot(range(first_dte),
+                 [100*sum([1 for x in tp_hit_days_list if x == d])/(tp_hit_days+0.01) for d in range(first_dte)])
+        # avg gains on this day
+        plt.plot(range(first_dte),
+                 [sum([gains_at_day[d][i] for i in range(iterations)])/iterations for d in range(first_dte)])
+        plt.plot([close_days, close_days], [0, 50])
+        plt.show()
+        #"""
 
         if tp_hit_days_list:
             tp_d_avg = sum(tp_hit_days_list) / len(tp_hit_days_list)
@@ -440,8 +452,19 @@ class MonteCarloSimulator(object):
             tp_d_med = -1
             tp_d_avg = -1
 
-        close_pop = sum([1 for x in gains_at_close if x > 0]) / len(gains_at_close)
-        close_pn = sum([1 for x in gains_at_close if x >= tp]) / len(gains_at_close)
+        print(f' Gains at close > 0: {sum([1 for x in gains_at_close if x > 0])},\n'
+              f'   TP hits b4 close: {tp_hit_days_b4_close}\n'
+              f'   SL hits b4 close: {sl_hit_days_b4_close}\n'
+              f' Gains at close len: {len(gains_at_close)}')
+        close_pop = (sum([1 for x in gains_at_close if x > 0]) + tp_hit_days_b4_close - sl_hit_days_b4_close) / \
+                    (len(gains_at_close) + tp_hit_days_b4_close + sl_hit_days_b4_close)
+        print(f'          Close PoP: {close_pop}\n')
+        print(f'Gains >= TP of {tp}: {sum([1 for x in gains_at_close if x >= tp])},\n'
+              f'   TP hits b4 close: {tp_hit_days_b4_close}\n'
+              f' Gains at close len: {len(gains_at_close)}')
+        close_pn = (sum([1 for x in gains_at_close if x >= tp]) + tp_hit_days_b4_close) / \
+                   (len(gains_at_close) + tp_hit_days_b4_close)
+        print(f'           Close PN: {close_pn}\n')
 
         return tp_hit_days / iterations, sl_hit_days / iterations, tp_d_med, tp_d_avg, close_pop, close_pn
 
@@ -455,15 +478,22 @@ class MonteCarloSimulator(object):
                                     option_strat.positions.dte_until_first_exp(),
                                     option_strat.positions.break_even,
                                     option_strat.positions.max_profit_point)
-        ptp, psl, tp_med, tp_avg, close_pop, close_pn = self.get_pn_psl(option_strat, risk_free_rate)
+        ptp, psl, tp_med, tp_avg, close_pop, close_pn = self.get_pn_psl(option_strat, risk_free_rate)#, mode="bjerksund")
 
         return DDict({
+            # prob of being above break even at expiration day close
             "prob_of_profit": round(prob_of_prof, 5),
+            # prof of hitting TP until expiration day close
             "p_tp": round(ptp, 5),
+            # prof of hitting SL until expiration day close
             "p_sl": round(psl, 5),
+            # median days needed to hit TP
             "tp_med": tp_med,
+            # avg days needed to hit SL
             "tp_avg": tp_avg,
+            # prob of being profitable until close day, inclusive (including prior hit TPs and SLs)
             "close_pop": close_pop,
+            # prob of hitting TP until close day, inclusive (including prior hit SLs)
             "close_pn": close_pn
         })
 
