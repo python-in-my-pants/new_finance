@@ -16,6 +16,9 @@ import matplotlib.pyplot as plt
 import random
 from pprint import pprint as pp
 from Utility import flatten
+from pandasgui import show
+
+debug = False
 
 
 class MonteCarloSimulator(object):
@@ -31,28 +34,37 @@ class MonteCarloSimulator(object):
     ticker, days, iterations -> pop, p_n, p_sl
     """
 
-    def __init__(self, tickers: list, days: int = 100, iterations: int = 10**5):
+    def __init__(self, tickers: list, days: int = 1000, iterations: int = 10**3):
 
-        print("Building monte carlo simulator ...")
+        if debug:
+            print("Building monte carlo simulator ...")
         tickers.append("msft")
         tickers.sort()
         self.tickers = [t.lower() for t in tickers]
         self.daily_close_prices_all_tickers = self.load_stock_data_dict(tickers)  # ticker ->
+
+        """for ticker in self.tickers:
+            df = self.daily_close_prices_all_tickers[ticker.upper()].dropna()
+            print(f'Ticker: {ticker} === Var: {df.var()}, Avg: {df.mean()}, Median: {df.median()}')"""
+
         self.sim_df = self.monte_carlo(tickers, days_forecast=days, iterations=iterations)
         self.days = days
-        print("Finished building monte carlo simulator!")
+        if debug:
+            print("Finished building monte carlo simulator!")
 
     # <editor-fold desc="file handling">
     def safe_stock_data_dict(self, data_df: pd.DataFrame):
         filename = "stock_data_dict"  # todo datestamp
 
         try:
-            print(f'Creating file:\n\t{filename}.pickle ...')
+            if debug:
+                print(f'Creating file:\n\t{filename}.pickle ...')
 
             with open(filename + ".pickle", "wb") as file:
                 pickle.dump(data_df, file)
 
-            print("File created successfully!")
+            if debug:
+                print("File created successfully!")
 
         except FileNotFoundError as e:
             print("While creating the file", filename, "an exception occurred:", e)
@@ -60,7 +72,8 @@ class MonteCarloSimulator(object):
     @staticmethod
     def download_stock_data(tickers: list) -> pd.DataFrame:
         data = pd.DataFrame()
-        print("Downloading history for", tickers)
+        if debug:
+            print("Downloading history for", tickers)
         if len(tickers) == 1:
             data[tickers] = wb.DataReader(tickers, data_source='yahoo', start='2010-1-1')['Adj Close']
             data = pd.DataFrame(data)
@@ -71,12 +84,14 @@ class MonteCarloSimulator(object):
 
     def load_stock_data_dict(self, tickers: list = None) -> pd.DataFrame:
         try:
-            print("Reading stock data dict file ...")
+            if debug:
+                print("Reading stock data dict file ...")
             f = pickle.load(open("stock_data_dict.pickle", "rb"))
             avail_tickers = f.columns.values.tolist()
             # print(set(tickers), set(avail_tickers), set(tickers) - set(avail_tickers))
             if not set([t.upper() for t in tickers]) - set(avail_tickers):
-                print("File read successfully!")
+                if debug:
+                    print("File read successfully!")
                 return f
 
         except FileNotFoundError as e:
@@ -161,6 +176,7 @@ class MonteCarloSimulator(object):
 
         return pd.DataFrame(price_list)
 
+    #@timeit
     def monte_carlo(self, tickers: list, days_forecast: int, iterations: int):
 
         simulated_dfs = []
@@ -230,29 +246,42 @@ class MonteCarloSimulator(object):
         plt.bar(bins, binned_prices)
         plt.show()
 
-    def get_pop(self, ticker, days, break_even, best_u_price):
+    def get_pop(self, ticker, days, break_even, best_u_price, delta):
 
-        end_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[days+1, 1:].astype('float')
+        end_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[days, 1:].astype('float')
+        #print(f'Var: {end_stock_prices.var()}, Avg: {end_stock_prices.mean()}, Median: {end_stock_prices.median()}')
 
         if best_u_price > break_even:  # directional long
+            show(end_stock_prices.loc[end_stock_prices > break_even])
             return len(end_stock_prices.loc[end_stock_prices > break_even]) / len(end_stock_prices)
         if best_u_price < break_even:  # directional short
+            show(end_stock_prices.loc[end_stock_prices < break_even])
             return len(end_stock_prices.loc[end_stock_prices < break_even]) / len(end_stock_prices)
+        if best_u_price == break_even:  # todo does this even make sense?
+            if delta > 0:  # directional long
+                show(end_stock_prices.loc[end_stock_prices > break_even])
+                return len(end_stock_prices.loc[end_stock_prices > break_even]) / len(end_stock_prices)
+            if delta < 0:  # directional short
+                show(end_stock_prices.loc[end_stock_prices < break_even])
+                return len(end_stock_prices.loc[end_stock_prices < break_even]) / len(end_stock_prices)
         else:
-            print("Something went wrong!")
+            print(f'Something went wrong getting pop: '
+                  f'ticker={ticker}, best_u_price={best_u_price}, break_even={break_even}, days={days}')
             ...
             # todo complex curves like butterflies & condors & such
             return -1
 
     @timeit
-    def get_pn_psl(self, option_strat, risk_free_rate, force_iterations=None, mode="bjerksund", with_plots=False) \
-            -> [float, float, int, int, float, float]:
+    def get_pn_psl(self, option_strat, risk_free_rate,
+                   force_iterations=None, mode="bjerksund", with_plots=False, outer_iterations=10) \
+            -> [float, float, float, float, float, float]:
         """
         TODO use bid/ask dependent on long/short leg, so the spread is incorporated into the calc
          -> already done by assuming fill at nat instead of mid, we pay the full spread on entry
 
         TODO shorts make this faulty
 
+        :param outer_iterations:
         :param with_plots:
         :param mode:
         :param force_iterations:
@@ -264,17 +293,20 @@ class MonteCarloSimulator(object):
         # ################################################################################################# #
         # constants
 
-        binomial_iterations = 10  # good trade off between accuracy and time
         stock_price_resolution = 100  # height of matrix
-        debug = False
 
-        print(f'Mode: {mode} Iterations: {binomial_iterations}')
+        if debug:
+            print(f'Mode: {mode} Iterations: {outer_iterations}')
 
         # ################################################################################################# #
 
+        # <editor-fold desc="Set up parameters">
         first_dte = option_strat.positions.dte_until_first_exp()+1
         close_days = datetime_to_dte(option_strat.close_date)+1
-        print(f'First dte: {first_dte}, close days: {close_days}')
+
+        if debug:
+            print(f'First dte: {first_dte}, close days: {close_days}')
+
         ticker = option_strat.env_container.ticker
         imp_vol = option_strat.env_container.env.IV
         current_stock_price = option_strat.env_container.u_ask
@@ -287,11 +319,15 @@ class MonteCarloSimulator(object):
 
         # 0 day is now, 1 day is end of today, 2 days is end of tomorrow etc
         if force_iterations:
-            simulated_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[:first_dte, 1:force_iterations+1]
+            simulated_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[:first_dte+1, 1:force_iterations+1]
         else:
-            simulated_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[:first_dte, 1:]
+            simulated_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[:first_dte+1, 1:]
         iterations = len(simulated_stock_prices.iloc[0, :])
+        # </editor-fold>
 
+        # ############################################################################################################ #
+
+        # <editor-fold desc="Set IV and increments">
         if False and imp_vol > 0:  # todo remove 'false' if iv is overstated in monte carlo
             # option 2: use iv percentile adjusted to dte and compute outliers separately
             deviation = (first_dte+1)/365.0 * imp_vol * current_stock_price
@@ -311,21 +347,22 @@ class MonteCarloSimulator(object):
 
         stock_price_increment = (max_stock - min_stock) / (stock_price_resolution+1)
 
-        print(f'Min stock: {min_stock}, Max stock: {max_stock}, Increment: {stock_price_increment}')
+        if debug:
+            print(f'Min stock: {min_stock}, Max stock: {max_stock}, Increment: {stock_price_increment}')
+        # </editor-fold>
 
-        @timeit
         def precompute_strat_gains():
             # (stock_price_res+1) * (first_dte+1) entries
             _strat_gains = [CustomDict(
                 {round(min_stock + i * stock_price_increment, 2): 0 for i in range(stock_price_resolution+1)})
-                for _ in range(first_dte)]
+                for _ in range(first_dte+1)]
 
             # precompute gains for certain u_prices and until first expiration
             for day in range(len(_strat_gains)):  # iterate over days
                 for stock_price in list(_strat_gains[day].keys()):
 
                     _strat_gains[day][stock_price] = \
-                        option_strat.positions.get_profit_n_dte(first_dte-day, stock_price, risk_free_rate)
+                        option_strat.positions.get_profit_n_dte(first_dte-day, stock_price, risk_free_rate, mode=mode)
 
             return _strat_gains
 
@@ -351,167 +388,227 @@ class MonteCarloSimulator(object):
             plt.show()
             #"""
 
-        # now we track the paths of mc simulations along strat_gains
+        # ############################################################################################################ #
 
-        done_iterations = set()
-        tp_hit_days = 0
-        tp_hit_days_list = []
-        tp_hit_days_b4_close = 0
-        sl_hit_days = 0
-        gains_at_close = []
-        sl_hit_days_b4_close = 0
+        def track_price_paths(a, b):
 
-        gains_at_day = [[0 for _ in range(iterations)] for _ in range(first_dte)]
-        anomaly_day = 0
+            # now we track the paths of mc simulations along strat_gains
+            done_iterations = set()
 
-        for d in range(first_dte):  # iterate over days, day 0 is now, day 1 is todays close etc
+            tp_hit_days = 0
+            tp_hit_days_list = []
+            tp_hit_days_b4_close = 0
 
-            # only go while there are undecided iterations left (tp hit / sl hit?)
-            if tp_hit_days+sl_hit_days >= iterations:
-                break
+            sl_hit_days = 0
+            sl_hit_days_b4_close = 0
 
-            tp_hits_b4 = tp_hit_days
-            tp_hits_this_day = 0
+            gains_at_close = []
+            gains_at_day = [[0 for _ in range(b-a)] for _ in range(first_dte+1)]
+            anomaly_day = 0
 
-            for i, sim_stock_price in enumerate(sorted(simulated_stock_prices.iloc[d, :].to_list())): # iterate over iterations
+            for d in range(first_dte+1):  # iterate over days, day 0 is now, day 1 is todays close etc
 
-                # result of this iteration is already clear
-                if i in done_iterations:
-                    continue
+                # only go while there are undecided iterations left (tp hit / sl hit?)
+                if tp_hit_days+sl_hit_days >= b-a:
+                    break
 
-                if tp_hits_this_day > 150:
-                    # print(f'TP hits on day {d}: {tp_hits_this_day}')
-                    anomaly_day = d
+                tp_hits_b4 = tp_hit_days
+                tp_hits_this_day = 0
 
-                sim_stock_price = round_cut(sim_stock_price, 2)  # random.randint(0, 50)
+                for i, sim_stock_price in enumerate(simulated_stock_prices.iloc[d, a:b].to_list()):  # iterate over iterations
 
-                try:
-                    gain = strat_gains[d][sim_stock_price]
-                except KeyError:
-                    print("key error")
-                    gain = option_strat.positions.get_profit_n_dte(first_dte-d, sim_stock_price, risk_free_rate)
+                    # result of this iteration is already clear
+                    if i in done_iterations:
+                        continue
 
-                gains_at_day[d][i] = gain
+                    if tp_hits_this_day > 150:
+                        # print(f'TP hits on day {d}: {tp_hits_this_day}')
+                        anomaly_day = d
 
-                if close_days == d:
-                    gains_at_close.append(gain)
+                    sim_stock_price = round_cut(sim_stock_price, 2)  # random.randint(0, 50)
 
-                if gain >= tp:
-                    tp_hits_this_day += 1
-                    done_iterations.add(i)
-                    tp_hit_days += 1
-                    tp_hit_days_list.append(d)
-                    if d < close_days:  # has to be < instead of <= bc for close pop, we already count gains_at_close,
-                        # otherwise tp hits on close day would be counted twice
-                        tp_hit_days_b4_close += 1
-                    continue
-                if gain <= sl:
-                    done_iterations.add(i)
-                    sl_hit_days += 1
-                    if d < close_days:
-                        sl_hit_days_b4_close += 1
-                    continue
+                    try:
+                        gain = strat_gains[d][sim_stock_price]
+                    except KeyError:
+                        gain = option_strat.positions.get_profit_n_dte(first_dte-d, sim_stock_price, risk_free_rate)
 
-            if False and tp_hit_days > 0 and (tp_hit_days-tp_hits_b4) / tp_hit_days > 0.30:
-                # hit more than 10% of TPs today alone
-                print(f'Weird day: d={d},'
-                      f'\n\tAvg gain: {sum([gains_at_day[d][i] for i in range(iterations)])/iterations},'
-                      f'\n\tAvg price: {sum(simulated_stock_prices.loc[d, :].to_list())/iterations}')
+                    gains_at_day[d][i] = gain
 
-        """
-        long_dir = option_strat.positions.max_profit_point > option_strat.positions.break_even
-        cases = sum([1 for x in simulated_stock_prices.iloc[close_days, :] if x > option_strat.positions.break_even]) \
-            if long_dir else \
-            sum([1 for x in simulated_stock_prices.iloc[close_days, :] if x < option_strat.positions.break_even])
+                    if close_days == d:
+                        gains_at_close.append(gain)
 
-        print(f'Max gain: {max(gains_at_close)}, Min gain: {min(gains_at_close)}')
-        print(f'Stock price {"above" if long_dir else "below"} {option_strat.positions.break_even} @ exp in {cases} '
-              f'cases bc max_profit u is {option_strat.positions.max_profit_point}')
-        print(f'Gains at close >0 in {sum([1 for x in gains_at_close if x > 0])} cases')
-        """
+                    if gain >= tp:
+                        tp_hits_this_day += 1
+                        done_iterations.add(i)
+                        tp_hit_days += 1
+                        tp_hit_days_list.append(d)
+                        if d < close_days:  # has to be < instead of <= bc for close pop, we already count gains_at_close,
+                            # otherwise tp hits on close day would be counted twice
+                            tp_hit_days_b4_close += 1
+                        continue
+                    if gain <= sl:
+                        done_iterations.add(i)
+                        sl_hit_days += 1
+                        if d < close_days:
+                            sl_hit_days_b4_close += 1
+                        continue
 
-        if with_plots:
-            bin_size = 1
-            bins = [i for i in range(int((max_stock/bin_size) + 1))]
-            print(f'Anomaly day: {anomaly_day}')
-            anomaly_bins = \
-                [sum([1 for p in simulated_stock_prices.loc[anomaly_day, :] if i * bin_size <= p < (i + 1) * bin_size])
-                 for i in bins]
-            comp_bins = \
-                [sum([1 for p in simulated_stock_prices.loc[anomaly_day+3, :] if i * bin_size <= p < (i + 1) * bin_size])
-                 for i in bins]
-            plt.bar(bins, anomaly_bins)
-            plt.bar(bins, comp_bins)
-            plt.show()
+                if debug and tp_hit_days > 0 and (tp_hit_days-tp_hits_b4) / tp_hit_days > 0.30:
+                    # hit more than 10% of TPs today alone
+                    print(f'Weird day: d={d},'
+                          f'\n\tAvg gain: {sum([gains_at_day[d][i] for i in range(b-a)])/(b-a)},'
+                          f'\n\tAvg price: {sum(simulated_stock_prices.loc[d, :].to_list())/(b-a)}')
 
-        if with_plots:
-            # """
-            # plt.imshow(gains_at_day, aspect="auto", origin="lower", cmap=plt.cm.get_cmap("plasma"))
-            plt.contourf(
-                [i for i in range(iterations)],
-                [d for d in range(first_dte)],
-                [[gains_at_day[d][i] for i in range(iterations)] for d in range(first_dte)],
-                list(np.linspace(int(-option_strat.positions.risk), int(option_strat.positions.max_profit),
-                                 int(20 * (option_strat.positions.max_profit + option_strat.positions.risk)))),
-                cmap=plt.cm.get_cmap("plasma"),
-                extend="neither"
-            )
-            plt.show()
-            #"""
+            # ######################################################################################################## #
 
-        # todo weight green curve with respective probs to get an expected value curve
+            if debug:
+                long_dir = option_strat.positions.max_profit_point > option_strat.positions.break_even
+                cases = sum([1 for x in simulated_stock_prices.iloc[close_days, a:b] if x > option_strat.positions.break_even]) \
+                    if long_dir else \
+                    sum([1 for x in simulated_stock_prices.iloc[close_days, a:b] if x < option_strat.positions.break_even])
 
-        if with_plots:
-            #"""
-            # summed prob of hitting tp up to this day (inclusive)
-            plt.plot(range(first_dte),
-                     [100*sum([1 for x in tp_hit_days_list if x <= d])/iterations for d in range(first_dte)])
-            # % of tp hits on each day
-            plt.plot(range(first_dte),
-                     [100*sum([1 for x in tp_hit_days_list if x == d])/(tp_hit_days+0.01) for d in range(first_dte)])
-            # avg gains on this day
-            plt.plot(range(first_dte),
-                     [sum([gains_at_day[d][i] for i in range(iterations)])/iterations for d in range(first_dte)])
-            plt.plot([close_days, close_days], [0, 50])
-            plt.show()
-            #"""
+                print(f'Max gain: {max(gains_at_close)}, Min gain: {min(gains_at_close)}')
+                print(f'Stock price {"above" if long_dir else "below"} {option_strat.positions.break_even} @ exp in {cases} '
+                      f'cases bc max_profit u is {option_strat.positions.max_profit_point}')
+                print(f'Gains at close >0 in {sum([1 for x in gains_at_close if x > 0])} cases')
 
-        if tp_hit_days_list:
-            tp_d_avg = sum(tp_hit_days_list) / len(tp_hit_days_list)
-            tp_d_med = median(tp_hit_days_list)
-        else:
-            tp_d_med = -1
-            tp_d_avg = -1
+            if with_plots:
+                bin_size = 1
+                bins = [i for i in range(int((max_stock/bin_size) + 1))]
+                print(f'Anomaly day: {anomaly_day}')
+                anomaly_bins = \
+                    [sum([1 for p in simulated_stock_prices.loc[anomaly_day, a:b] if i * bin_size <= p < (i + 1) * bin_size])
+                     for i in bins]
+                comp_bins = \
+                    [sum([1 for p in simulated_stock_prices.loc[anomaly_day+3, a:b] if i * bin_size <= p < (i + 1) * bin_size])
+                     for i in bins]
+                plt.bar(bins, anomaly_bins)
+                plt.bar(bins, comp_bins)
+                plt.show()
 
-        close_pop = (sum([1 for x in gains_at_close if x > 0]) + tp_hit_days_b4_close - sl_hit_days_b4_close) / \
-                    (len(gains_at_close) + tp_hit_days_b4_close + sl_hit_days_b4_close)
-        close_pn = (sum([1 for x in gains_at_close if x >= tp]) + tp_hit_days_b4_close) / \
-                   (len(gains_at_close) + tp_hit_days_b4_close)
+            if with_plots:
+                # """
+                # plt.imshow(gains_at_day, aspect="auto", origin="lower", cmap=plt.cm.get_cmap("plasma"))
+                plt.contourf(
+                    [i for i in range(b-a)],
+                    [d for d in range(first_dte)],
+                    [[gains_at_day[d][i] for i in range(b-a)] for d in range(first_dte)],
+                    list(np.linspace(int(-option_strat.positions.risk), int(option_strat.positions.max_profit),
+                                     int(20 * (option_strat.positions.max_profit + option_strat.positions.risk)))),
+                    cmap=plt.cm.get_cmap("plasma"),
+                    extend="neither"
+                )
+                plt.show()
+                #"""
+
+            # todo weight green curve with respective probs to get an expected value curve
+
+            if with_plots:
+                #"""
+                # summed prob of hitting tp up to this day (inclusive)
+                plt.plot(range(first_dte),
+                         [100*sum([1 for x in tp_hit_days_list if x <= d])/(b-a) for d in range(first_dte)])
+                # % of tp hits on each day
+                plt.plot(range(first_dte),
+                         [100*sum([1 for x in tp_hit_days_list if x == d])/(tp_hit_days+0.01) for d in range(first_dte)])
+                # avg gains on this day
+                plt.plot(range(first_dte),
+                         [sum([gains_at_day[d][i] for i in range(b-a)])/(b-a) for d in range(first_dte)])
+                plt.plot([close_days, close_days], [0, 50])
+                plt.show()
+                #"""
+
+            # ######################################################################################################## #
+
+            if tp_hit_days_list:
+                _tp_d_avg = sum(tp_hit_days_list) / len(tp_hit_days_list)
+                _tp_d_med = median(tp_hit_days_list)
+            else:
+                _tp_d_med = -1
+                _tp_d_avg = -1
+
+            # todo (len(gains_at_close) + tp_hit_days_b4_close + sl_hit_days_b4_close)
+            #  ZeroDivisionError: division by zero
+            _close_pop = (sum([1 for x in gains_at_close if x > 0]) + tp_hit_days_b4_close - sl_hit_days_b4_close) / \
+                         (len(gains_at_close) + tp_hit_days_b4_close + sl_hit_days_b4_close)
+
+            _close_pn = (sum([1 for x in gains_at_close if x >= tp]) + tp_hit_days_b4_close) / \
+                        (len(gains_at_close) + tp_hit_days_b4_close)
+
+            if debug:
+                print(f'\n'
+                      f' Gains at close > 0: {sum([1 for x in gains_at_close if x > 0])},\n'
+                      f'   TP hits b4 close: {tp_hit_days_b4_close}\n'
+                      f'   SL hits b4 close: {sl_hit_days_b4_close}\n'
+                      f' Gains at close len: {len(gains_at_close)}')
+                print(f'          Close PoP: {_close_pop}\n')
+                print(f'G@clo >= TP of {tp}: {sum([1 for x in gains_at_close if x >= tp])},\n'
+                      f'   TP hits b4 close: {tp_hit_days_b4_close}\n'
+                      f' Gains at close len: {len(gains_at_close)}')
+                print(f'           Close PN: {_close_pn}\n')
+
+            return tp_hit_days / (b-a), sl_hit_days / (b-a), \
+                   _tp_d_med, _tp_d_avg, \
+                   _close_pop, _close_pn
+
+        # <editor-fold desc="Compute probs">
+
+        # split simulated stock prices in this many batches and compute probs for each batch, then average over results
+        batch_size = int(iterations/outer_iterations)
+        if batch_size < 10:
+            outer_iterations = 1
+
+        p_tp, p_sl, tp_d_med, tp_d_avg, close_pop, close_pn = 0, 0, 0, 0, 0, 0
+
+        for outer_loop_iter in range(outer_iterations):
+            in_p_tp, in_p_sl, in_tp_d_med, in_tp_d_avg, in_close_pop, in_close_pn = \
+                track_price_paths(outer_loop_iter*batch_size, (outer_loop_iter+1)*batch_size)
+
+            p_tp += in_p_tp
+            p_sl += in_p_sl
+            tp_d_med += in_tp_d_med
+            tp_d_avg += in_tp_d_avg
+            close_pop += in_close_pop
+            close_pn += in_close_pn
+
+        p_tp /= outer_iterations
+        p_sl /= outer_iterations
+        tp_d_med /= outer_iterations
+        tp_d_avg /= outer_iterations
+        close_pop /= outer_iterations
+        close_pn /= outer_iterations
 
         if debug:
-            print(f' Gains at close > 0: {sum([1 for x in gains_at_close if x > 0])},\n'
-                  f'   TP hits b4 close: {tp_hit_days_b4_close}\n'
-                  f'   SL hits b4 close: {sl_hit_days_b4_close}\n'
-                  f' Gains at close len: {len(gains_at_close)}')
-            print(f'          Close PoP: {close_pop}\n')
-            print(f'Gains >= TP of {tp}: {sum([1 for x in gains_at_close if x >= tp])},\n'
-                  f'   TP hits b4 close: {tp_hit_days_b4_close}\n'
-                  f' Gains at close len: {len(gains_at_close)}')
-            print(f'           Close PN: {close_pn}\n')
+            print(f'\nPn_Psl results with iterations={outer_iterations}, simulation size={iterations}:\n'
+                  f'\n\tAt expiration:\n'
+                  f'\t\tP50: {p_tp * 100: >2.2f} %\n'
+                  f'\t\tPSL: {p_sl * 100: >2.2f} %\n'
+                  f'\n'
+                  f'\tAt close:\n'
+                  f'\t\tPoP: {close_pop * 100: >2.2f} %\n'
+                  f'\t\tP50: {close_pn * 100: >2.2f} %\n'
+                  f'\t\tAvg: {tp_d_avg:.2f}\n'
+                  f'\t\tMed: {tp_d_med:.2f}')
 
-        return tp_hit_days / iterations, sl_hit_days / iterations, tp_d_med, tp_d_avg, close_pop, close_pn
+        # </editor-fold>
+
+        return p_tp, p_sl, tp_d_med, tp_d_avg, close_pop, close_pn
 
     def get_pop_pn_sl(self, option_strat, risk_free_rate):
 
         # for calls: (for puts inverted <>)
         # if long strike < short strike => debit => max gain = strike_diff - debit paid
         # if long strike > short strike => credit => max gain = credit received
-
         prob_of_prof = self.get_pop(option_strat.env_container.ticker,
                                     option_strat.positions.dte_until_first_exp(),
                                     option_strat.positions.break_even,
-                                    option_strat.positions.max_profit_point)
+                                    option_strat.positions.max_profit_point,
+                                    option_strat.positions.greeks["delta"])
+
         ptp, psl, tp_med, tp_avg, close_pop, close_pn = self.get_pn_psl(option_strat, risk_free_rate)#, mode="bjerksund")
+        if debug:
+            print(f'pop: {prob_of_prof}, ptp {ptp}, psl {psl}, tp_med {tp_med}, tp_avg {tp_avg}, '
+                  f'close_pop {close_pop}, close_pn {close_pn}')
 
         return DDict({
             # prob of being above break even at expiration day close
@@ -531,9 +628,50 @@ class MonteCarloSimulator(object):
         })
 
 
+@timeit
+def test_mc_accu(option_strat, risk_free_rate, outer_iter=1, sim_size=10**4):
+
+    ptp = 0
+    prob_of_profit = 0
+    psl = 0
+    tp_med_d = 0
+    tp_avg_d = 0
+    close_pop = 0
+    close_pn = 0
+
+    for i in range(outer_iter):
+        mcs = MonteCarloSimulator(["amc"], iterations=sim_size)
+        prob_dict = mcs.get_pop_pn_sl(option_strat=option_strat, risk_free_rate=risk_free_rate)
+
+        ptp += prob_dict.p_tp
+        prob_of_profit += prob_dict.prob_of_profit
+        psl += prob_dict.p_sl
+        tp_med_d += prob_dict.tp_med
+        tp_avg_d += prob_dict.tp_avg
+        close_pop += prob_dict.close_pop
+        close_pn += prob_dict.close_pn
+
+    ptp /= outer_iter
+    prob_of_profit /= outer_iter
+    psl /= outer_iter
+    tp_med_d /= outer_iter
+    tp_avg_d /= outer_iter
+    close_pop /= outer_iter
+    close_pn /= outer_iter
+
+    print(f'\nAccuracy test with iterations={outer_iter}, simulation size={sim_size}:\n'
+          f'\n\tAt expiration:\n'
+          f'\t\tPoP: {prob_of_profit*100: >2.2f} %\n'
+          f'\t\tP50: {ptp*100: >2.2f} %\n'
+          f'\t\tPSL: {psl*100: >2.2f} %\n'
+          f'\n'
+          f'\tAt close:\n'
+          f'\t\tPoP: {close_pop*100: >2.2f} %\n'
+          f'\t\tP50: {close_pn*100: >2.2f} %\n'
+          f'\t\tAvg: {tp_avg_d:.2f}\n'
+          f'\t\tMed: {tp_med_d:.2f}')
+
+
 if __name__ == "__main__":
     pd.set_option('display.float_format', lambda x: '%.8f' % x)
-    mcs = MonteCarloSimulator(["amc"])
-    mcs.plot_simulated_prices("amc")
-
 

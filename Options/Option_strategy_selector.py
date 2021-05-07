@@ -14,12 +14,16 @@ from matplotlib import pyplot as plt
 from typing import Optional, Callable, List, Dict, Union, Any, Tuple, Iterable
 from yahoo_fin import stock_info as si
 from DDict import DDict
-from MonteCarlo import MonteCarloSimulator
-import time
+from MonteCarlo import MonteCarloSimulator, test_mc_accu
 import pathlib
 from Option import Option
 from Option_utility import *
 from pprint import pprint as pp, pformat as pf
+from Utility import timeit
+from pandasgui import show
+from collections import OrderedDict
+
+
 
 """
 import ipdb
@@ -36,7 +40,7 @@ debug = True
 debug_level = 1
 
 ACCOUNT_BALANCE = 1471
-DEFAULT_THRESHOLD = 0.3
+DEFAULT_THRESHOLD = -1
 
 #np.seterr(all='raise')
 
@@ -292,7 +296,7 @@ def get_option_chain(yf_obj, u_ask, save=True, min_vol=0):
     start = datetime.now()
     current_path = pathlib.Path().absolute().as_posix()
 
-    if os.path.isfile(current_path + "\\chains\\" + yf_obj.ticker + "_chain.pickle") and not force_chain_download:  # if not get_chain:
+    if os.path.isfile(current_path + "\\chains\\" + yf_obj.ticker + "_chain.pickle") and not force_chain_download:
         return OptionChain.from_file(filename=yf_obj.ticker + "_chain").volume(min_vol)
 
     option_chain = DDict()
@@ -321,6 +325,7 @@ def get_option_chain(yf_obj, u_ask, save=True, min_vol=0):
         contracts["mid"] = 0.0
         contracts["P(ITM)"] = 0.0
         contracts["P(OTM)"] = 0.0
+        # relative percent change of the value of the option for one percent change in the price of the underlying stock
         contracts["gearing"] = 0.0
 
         risk_free_interest = get_risk_free_rate(_dte)
@@ -344,10 +349,9 @@ def get_option_chain(yf_obj, u_ask, save=True, min_vol=0):
             contracts.loc[index, "rho"] = rho
             contracts.loc[index, "IV"] = iv
             if contract_price > 0:
-                contracts.loc[index, "gearing"] = contracts.loc[index, "delta"] * underlying_ask / contract_price
+                contracts.loc[index, "gearing"] = 100 * contracts.loc[index, "delta"] * underlying_ask / contract_price
             else:
                 contracts.loc[index, "gearing"] = float('inf')
-
             contracts.loc[index, "P(ITM)"] = delta_to_itm_prob(delta, contract_type)
             contracts.loc[index, "P(OTM)"] = 100 - contracts.loc[index, "P(ITM)"]
 
@@ -548,6 +552,7 @@ class StrategyConstraints:
         self.defined_risk_only = defined_risk_only
 
 
+@timeit
 def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
                        monte_carlo: MonteCarloSimulator, auto: bool = False, use_predefined_strats: bool = True,
                        single_strat_cons: Dict[str, Tuple[str, Any]] = None,
@@ -575,13 +580,13 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
     print(f'\nChecking ticker {ticker} ...\n')
 
     print(f'Settings:\n\n'
-          f'          Defined risk only: {strat_cons.defined_risk_only}\n'
-          f'               Avoid events: {strat_cons.avoid_events}\n'
-          f'                 Min vol 30: {strat_cons.min_vol30}\n'
-          f'   Min single option volume: {strat_cons.min_sinle_opt_vol}\n'
-          f'       Min open interest 30: {strat_cons.min_oi30}\n'
-          f'                Strict mode: {strat_cons.strict_mode}\n'
-          f'Assignment must be possible: {strat_cons.assignment_must_be_possible}\n')
+          f'           Defined risk only: {strat_cons.defined_risk_only}\n'
+          f'                Avoid events: {strat_cons.avoid_events}\n'
+          f'                  Min vol 30: {strat_cons.min_vol30}\n'
+          f'    Min single option volume: {strat_cons.min_sinle_opt_vol}\n'
+          f'        Min open interest 30: {strat_cons.min_oi30}\n'
+          f'                 Strict mode: {strat_cons.strict_mode}\n'
+          f' Assignment must be possible: {strat_cons.assignment_must_be_possible}\n')
 
     meta = get_meta_data(ticker, strat_cons.min_sinle_opt_vol)
 
@@ -590,18 +595,18 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
         return []
 
     print(f'\nStock info:\n\n'
-          f'                  Stock bid: {meta.u_bid}\n'
-          f'                  Stock ask: {meta.u_ask}\n'
-          f'                     Sector: {meta.sector if meta.sector else "N/A"}\n'
-          f'                        IVR: {meta.ivr}\n'
-          f'                     RSI 20: {meta.rsi20}\n'
-          f'                     Vol 30: {meta.vol30}\n'
-          f'           Open interest 30: {meta.oi30}\n'
-          f'              Next earnings: {meta.next_earnings}\n'
-          f'  Short term outlook (20 d): {meta.short_outlook}\n'
-          f'    Mid term outlook (50 d): {meta.mid_outlook}\n'
-          f'  Long term outlook (100 d): {meta.long_outlook}\n'
-          f'             Analyst rating: {meta.analyst_rating:.2f}')
+          f'                   Stock bid: {meta.u_bid}\n'
+          f'                   Stock ask: {meta.u_ask}\n'
+          f'                      Sector: {meta.sector if meta.sector else "N/A"}\n'
+          f'                         IVR: {meta.ivr}\n'
+          f'                      RSI 20: {meta.rsi20}\n'
+          f'                      Vol 30: {meta.vol30}\n'
+          f'            Open interest 30: {meta.oi30}\n'
+          f'               Next earnings: {meta.next_earnings}\n'
+          f'   Short term outlook (20 d): {meta.short_outlook}\n'
+          f'     Mid term outlook (50 d): {meta.mid_outlook}\n'
+          f'   Long term outlook (100 d): {meta.long_outlook}\n'
+          f'              Analyst rating: {meta.analyst_rating:.2f}')
 
     def binary_events_present():
 
@@ -729,13 +734,15 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
     # -----------------------------------------------------------------------------------------------------------------
 
     """
-    print("Cheesecake")
     _debug("Expirations:", meta.option_chain.expirations, "\nLength:", len(meta.option_chain.options))
-    _debug(meta.option_chain.options.head(100))
+    show(meta.option_chain.options)
+    #_debug(meta.option_chain.options.head(100))
     #"""
 
     # filter out low individual volume options after liquidity test
     meta.option_chain = meta.option_chain.volume(strat_cons.min_sinle_opt_vol)
+
+    _debug(f'Option chain:\n {meta.option_chain.head(5000)}\n)', 3)
 
     env = DDict({
         "IVR": meta.ivr,
@@ -781,11 +788,15 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
                 if pos.positions:
                     myfile.write(str(pos))
     else:
+        pos_df = pd.DataFrame()
         for pos in proposed_strategies:
             if pos.positions:
                 print(pos)
-                return
+                # todo make the legs dataframes, otherwise only the last leg is shown
+                pos_df = pd.concat([pos_df, pos.to_df()], copy=False, ignore_index=True)
                 # pos.positions.plot_profit_dist_on_first_exp()
+        show(pos_df.transpose())
+
 
 
 # <editor-fold desc="Option Framework">
@@ -829,14 +840,38 @@ class Position:
 
         self.set_greeks()
 
-        # todo
-        self.p50 = 0
-
     def __repr__(self):
         return f'{self.quantity:+d} {self.asset} for a cost of {self.cost:.2f} $'
 
     def __str__(self):
         return self.repr()
+
+    def to_dict(self):
+
+        return OrderedDict([
+            ("l_name", self.asset.name),
+            ("l_asset", self.asset),
+            ("l_type", "Option" if type(self.asset) is Option else "Stock"),
+            ("l_iv", self.asset.iv if type(self.asset) is Option else "N/A"),
+            ("l_oi", self.asset.oi if type(self.asset) is Option else "N/A"),
+            ("l_opt_type", self.asset.opt_type if type(self.asset) is Option else "N/A"),
+            ("l_strike", self.asset.strike if type(self.asset) is Option else "N/A"),
+            ("l_expiration", self.asset.expiration if type(self.asset) is Option else "N/A"),
+            ("l_dte", self.asset.dte if type(self.asset) is Option else "N/A"),
+            ("l_bid", self.asset.bid),
+            ("l_ask", self.asset.ask),
+            ("l_quantity", self.quantity),
+            ("l_delta", self.greeks["delta"]),
+            ("l_gamma", self.greeks["gamma"]),
+            ("l_theta", self.greeks["theta"]),
+            ("l_vega", self.greeks["vega"]),
+            ("l_rho", self.greeks["rho"]),
+            ("l_cost", self.cost),
+            ("l_risk", self.risk),
+            ("l_bpr", self.bpr),
+            ("l_max_profit", self.max_profit),
+            ("l_rom", self.rom),
+            ("l_break_even", self.break_even)])
 
     def update(self):
         self.cost = self.get_cost()
@@ -1784,6 +1819,9 @@ class CombinedPosition:
         self.max_profit = -1
         self.max_profit_point = -1  # smallest underlying price at which max profit occurs todo mult possible (use enum and return list of indices)
         self.rom = -1
+        self.rom50 = -1
+        self.prof_time = -1  # profitmax / dte
+        self.prof_time50 = -1  # profitmax / dte * 0.5
 
         self.p50 = -1  # prob of reaching 50 % of max rofit until first expiration
         self.prob_of_profit = -1
@@ -1799,6 +1837,29 @@ class CombinedPosition:
 
         self.greeks = self.get_greeks()
         self.theta_to_delta = float(self.greeks["theta"] / float(max(abs(self.greeks["delta"]), 0.00001)))
+
+    def get_dicts(self):
+        d = [
+            ("dtfe", self.dte_until_first_exp()),
+            ("expected_move", self.expected_move),
+            ("cost", self.cost),
+            ("bpr", self.bpr),
+            ("break_even", self.break_even),
+            ("max_profit", self.max_profit),
+            ("max_profit_point", self.max_profit_point),
+            ("rom", self.rom),
+            ("rom50", self.rom50),
+            ("prof_per_day", self.prof_time),
+            ("prof_per_day50", self.prof_time50),
+            ("delta", self.greeks["delta"]),
+            ("gamma", self.greeks["gamma"]),
+            ("theta", self.greeks["theta"]),
+            ("vega", self.greeks["vega"]),
+            ("rho", self.greeks["rho"]),
+            ("theta_delta", self.theta_to_delta)
+        ]
+        position_dict = [pos.to_dict() for pos in list(self.pos_dict.values())]
+        return d, position_dict
 
     def __repr__(self):
         return self.repr()
@@ -1844,9 +1905,9 @@ class CombinedPosition:
                f'\n' \
                f'{indent}                 Max profit: {self.max_profit:>+6.2f} $' \
                f'\n' \
-               f'{indent}                   Max risk: {-self.risk:>+6.2f} $' \
+               f'{indent}                   Max risk: {self.risk:>+6.2f} $' \
                f'\n' \
-               f'{indent}                        BPR: {-self.bpr:>+6.2f} $' \
+               f'{indent}                        BPR: {self.bpr:>+6.2f} $' \
                f'\n' \
                f'\n' \
                f'{indent}       Break even on expiry: {self.break_even:4.2f} $' \
@@ -1860,9 +1921,16 @@ class CombinedPosition:
                f'{indent}     Implied 3 STD DEV move: ±{3 * self.expected_move:4.2f} $ ' \
                f'({max(self.u_mid - 3 * self.expected_move, 0):.2f} $/{self.u_mid + 3 * self.expected_move:.2f} $)' \
                f'\n' \
+               f'\n' \
                f'{indent}                Half profit: {self.max_profit / 2:+6.2f} $' \
                f'\n' \
-               f'{indent}Return on margin (TP @ 50%): {self.rom * 100:.2f}%' \
+               f'{indent}           Return on margin: {self.rom * 100:.2f}%' \
+               f'\n'\
+               f'{indent}Return on margin (TP @ 50%): {self.rom50 * 100:.2f}%' \
+               f'\n' \
+               f'{indent}           Max profit / DTE: {self.prof_time:.2f}' \
+               f'\n' \
+               f'{indent}          Half profit / DTE: {self.prof_time50:.2f}' \
                f'\n\n'
 
     def detail(self, t=0):
@@ -1923,6 +1991,9 @@ class CombinedPosition:
         self.break_even = self.get_break_even()
         self.max_profit, self.max_profit_point = self.get_max_profit()
         self.rom = self.get_rom()
+        self.rom50 = self.rom/2
+        self.prof_time = self.max_profit/max(1, self.dte_until_first_exp())
+        self.prof_time50 = self.prof_time/2
 
         # pop ptp psl
         # todo mcs gives only option value? what about naked shorts for example? stock in comb pos? ->
@@ -1932,34 +2003,6 @@ class CombinedPosition:
     def set_expected_move(self, iv):
         # TODO make dte a float with day ending at market close
         self.expected_move = iv * self.u_mid * (self.dte_until_first_exp()+1) / 365.0
-
-    '''def set_probs(self, tp=None, sl=None):
-        """
-        not regularyly used in combined position, provides functinality for option strat
-        probs will be zero when printing unless this method is called beforehand
-        :param tp:
-        :param sl:
-        :return:
-        """
-        return
-
-        if not tp:
-            tp = self.max_profit / 2
-        """
-        prob_dict = self.mcs.get_pop_pn_sl(self.underlying,
-                                           self.cost - self.stock.cost,
-
-                                           self.greeks["delta"],
-                                           self.greeks["gamma"],
-                                           self.greeks["theta"],
-
-                                           self.dte_until_first_exp(),
-                                           tp,
-                                           stock_quantity=self.stock.quantity)
-        """
-        prob_dict = self.mcs.get_pop_pn_sl()
-        self.prob_of_profit = prob_dict.prob_of_profit
-        self.p50 = prob_dict.p_tp'''
 
     def dte_until_first_exp(self):
         return date_str_to_dte(min([p.asset.expiration for p in self.pos_dict.values() if type(p.asset) is Option]))
@@ -2231,7 +2274,7 @@ class CombinedPosition:
             if dte > 0:
                 if mode == "bjerksund":
                     future_leg_price, _, delta, gamma, theta, vega, rho = get_greeks(leg.asset.opt_type,
-                                                                                     stock_price,
+                                                                                     max(0.01, stock_price),
                                                                                      leg.asset.strike,
                                                                                      dte / 365.0,
                                                                                      risk_free_rate,
@@ -2265,7 +2308,7 @@ class CombinedPosition:
             leg_gains += leg_gain
 
         leg_gains += (stock_price - self.u_ask) * self.stock.quantity
-        return round_cut(leg_gains, 2)
+        return round(leg_gains, 2)
 
     def add_asset(self, asset, quantity, no_update=False):
         """
@@ -2502,7 +2545,8 @@ class CombinedPosition:
         """
         if self.bpr == 0:
             return float('inf')
-        return self.max_profit / self.bpr * 0.5
+        rom = self.max_profit / self.bpr
+        return rom
 
 
 class VerticalSpread(CombinedPosition):
@@ -2598,6 +2642,16 @@ class EnvContainer:
         self.ticker = ticker
         self.min_per_option_vol = min_per_option_vol
 
+    def to_dict(self):
+        d = {
+            "env_ticker": self.ticker,
+            "u_bid": self.u_bid,
+            "u_ask": self.u_ask,
+            "min_per_option_vol": self.min_per_option_vol,
+        }
+        d.update(self.env)
+        return d
+
 
 class OptionStrategy:
     """
@@ -2618,7 +2672,7 @@ class OptionStrategy:
 
     def __init__(self, name: str, position_builder: Callable[[Any], Optional[CombinedPosition]], env: EnvContainer,
                  conditions: dict = None, hints: list = list(), tp_perc: float = 100, sl_perc: float = 100,
-                 close_dte: int = 21, close_perc: float = 50, threshold=DEFAULT_THRESHOLD):
+                 close_dte: int = 21, close_perc: float = 50, recommendation_threshold=DEFAULT_THRESHOLD):
 
         self.name = name
         self.position_builder = position_builder  # name of the method that returns the positios
@@ -2631,11 +2685,12 @@ class OptionStrategy:
         self.hints = ["Always set a take profit!", "It's just money :)"] + hints
         self.tp_percentage = tp_perc
         self.sl_percentage = sl_perc
-        self.recommendation_threshold = threshold
+        self.recommendation_threshold = recommendation_threshold
 
         # set when done building
         self.recommendation = 0
         self.test_results = "No tests deducted yet"
+        self.test_results_dict = OrderedDict()
         self.positions: Optional[CombinedPosition] = None
         self.ptp = -1
         self.psl = -1
@@ -2644,6 +2699,7 @@ class OptionStrategy:
         self.tp_avg_d = -1
         self.close_pop = -1
         self.close_pn = -1
+        self.e_tp_close = -1  # close_pn * tp_percentaga/100 * max_gain
         self.greek_exposure = None  # set after environment check
         self.close_date = None
 
@@ -2716,6 +2772,8 @@ class OptionStrategy:
                f'\n' \
                f'{indent}   P{int(self.tp_percentage)} at exp: {self.ptp * 100: >3.2f} %' \
                f'\n' \
+               f'{indent}  E(TP)@close: {self.e_tp_close: >3.2f} $' \
+               f'\n' \
                f'{indent}\n    Stop loss: {inner_sl}' \
                f'\n' \
                f'\n' \
@@ -2763,6 +2821,89 @@ class OptionStrategy:
                f'{indent}    Hints: {h}' \
                f'\n'
 
+    def to_df(self):
+        """
+        self.name = name
+        self.position_builder = position_builder  # name of the method that returns the positios
+        self.env_container = env
+
+        # optionals
+        self.conditions = conditions
+        self.close_dte = close_dte
+        self.close_perc = close_perc
+        self.hints = ["Always set a take profit!", "It's just money :)"] + hints
+        self.tp_percentage = tp_perc
+        self.sl_percentage = sl_perc
+        self.recommendation_threshold = recommendation_threshold
+
+        # set when done building
+        self.recommendation = 0
+        self.test_results = "No tests deducted yet"
+        self.positions: Optional[CombinedPosition] = None
+        self.ptp = -1
+        self.psl = -1
+        self.prob_of_profit = -1
+        self.tp_med_d = -1
+        self.tp_avg_d = -1
+        self.close_pop = -1
+        self.close_pn = -1
+        self.e_tp_close = -1  # close_pn * tp_percentaga/100 * max_gain
+        self.greek_exposure = None  # set after environment check
+        self.close_date = None
+
+        self.get_positions(self.env_container)
+        """
+
+        main_dict = [
+            ("underlying", self.positions.underlying),
+            ("name", self.name),
+            ("creation_time", get_timestamp()),
+            ("close_dte", self.close_dte),
+            ("close_perc", self.close_perc),
+            ("tp_percentage", self.tp_percentage),
+            ("sl_percentage", self.sl_percentage),
+            ("recommendation_threshold", self.recommendation_threshold),
+            ("recommendation", self.recommendation),
+            ("ptp", self.ptp),
+            ("psl", self.psl),
+            ("pop", self.prob_of_profit),
+            ("tp_med_d", self.tp_med_d),
+            ("tp_avg_d", self.tp_avg_d),
+            ("close_pop", self.close_pop),
+            ("close_pn", self.close_pn),
+            ("e_tp_close", self.e_tp_close),
+            ("close_date", self.close_date.date()),
+            ("stop_loss", "N/A" if self.sl_percentage >= 100 else self.sl_percentage / 100 * self.positions.risk),
+        ]
+
+        """("delta_exp", self.greek_exposure["delta"]),
+        ("gamma_exp", self.greek_exposure["gamma"]),
+        ("theta_exp", self.greek_exposure["theta"]),
+        ("vega_exp", self.greek_exposure["vega"]),
+        ("rho_exp", self.greek_exposure["rho"]),"""
+
+        env_dict = self.env_container.to_dict()
+
+        if self.conditions:
+            condition_dict = OrderedDict(self.conditions)
+        else:
+            condition_dict = OrderedDict()
+
+        test_res_dict = self.test_results_dict
+
+        cpos_dict, leg_dicts = self.positions.get_dicts()
+
+        full_dict = OrderedDict(main_dict +
+                                list(env_dict.items()) +
+                                list(condition_dict.items()) +
+                                list(test_res_dict.items()) +
+                                cpos_dict)
+        for leg_dict in leg_dicts:
+            full_dict.update(leg_dict)
+
+        df = pd.DataFrame(full_dict, index=[0])
+        return df
+
     def _test_environment(self, env: dict):
         """
         :return: score from -1 to 1;
@@ -2774,6 +2915,7 @@ class OptionStrategy:
             score = 0
             if self.conditions:
                 self.test_results = ""
+                self.test_results_dict = OrderedDict()
                 for key, val in self.conditions.items():
                     tmp = -2
                     for entry in val:
@@ -2785,10 +2927,13 @@ class OptionStrategy:
                         _debug(f'Testing {self.name} for: {key} = {entry.__name__}\n'
                                f'\t{key}:       {env[key]:+.2f}\n'
                                f'\t{key} Score: {tmp:+.2f}', 3)
+                    self.test_results_dict[key] = tmp
                     score += tmp
+                self.test_results_dict["score"] = score / len(self.conditions.keys())
                 return score / len(self.conditions.keys())
             else:
                 self.test_results = pf(env)
+                self.test_results_dict = dict()
                 return 1
         except KeyError as e:
             _warn(f'Key "{e}" was not found in environment "{env.keys()}" '
@@ -2866,6 +3011,12 @@ class OptionStrategy:
     """
 
     def _set_probs(self):
+        """
+        test_mc_accu(self, get_risk_free_rate(self.positions.dte_until_first_exp()), sim_size=10 ** 2)
+        test_mc_accu(self, get_risk_free_rate(self.positions.dte_until_first_exp()), sim_size=10 ** 3)
+        test_mc_accu(self, get_risk_free_rate(self.positions.dte_until_first_exp()))
+        """
+
         prob_dict = self.positions.mcs.get_pop_pn_sl(self,
                                                      get_risk_free_rate(self.positions.dte_until_first_exp()))
         self.ptp = prob_dict.p_tp
@@ -2875,6 +3026,7 @@ class OptionStrategy:
         self.tp_avg_d = prob_dict.tp_avg
         self.close_pop = prob_dict.close_pop
         self.close_pn = prob_dict.close_pn
+        self.e_tp_close = self.tp_percentage/100 * self.positions.max_profit * self.close_pn
 
     def _check_liquidity(self):
         return self._check_bid_ask_spread() and self._check_vol()
@@ -2907,7 +3059,7 @@ class OptionStrategy:
 
 class DummyStrat(OptionStrategy):
 
-    def __init__(self, threshold=DEFAULT_THRESHOLD):
+    def __init__(self, recommendation_threshold=DEFAULT_THRESHOLD):
         self.name = "dummy strategy"
         self.positions = CombinedPosition(...)
         self.conditions = {
@@ -2938,14 +3090,14 @@ class DummyStrat(OptionStrategy):
                          self.hints,
                          self.tp_percentage,
                          self.sl_percentage,
-                         threshold=threshold)
+                         recommendation_threshold=recommendation_threshold)
 
 
 class LongCall(OptionStrategy):
 
-    def __init__(self, env: EnvContainer, threshold=0.5, short_term=False):
+    def __init__(self, env: EnvContainer, recommendation_threshold=0.5, short_term=False):
         """
-        :param threshold: test_env must be greater than treshold in order to start building the position
+        :param recommendation_threshold: test_env must be greater than treshold in order to start building the position
         """
         self.short_term = short_term
 
@@ -2965,7 +3117,7 @@ class LongCall(OptionStrategy):
                          sl_perc=100,
                          close_dte=21 if not short_term else 0,
                          close_perc=100,
-                         threshold=threshold)
+                         recommendation_threshold=recommendation_threshold)
 
     def _get_tasty_variation(self):
         """
@@ -2989,9 +3141,9 @@ class LongCall(OptionStrategy):
 
 class LongPut(OptionStrategy):
 
-    def __init__(self, env: EnvContainer, threshold=0.5, short_term=False):
+    def __init__(self, env: EnvContainer, recommendation_threshold=0.5, short_term=False):
         """
-        :param threshold: test_env must be greater than treshold in order to start building the position
+        :param recommendation_threshold: test_env must be greater than treshold in order to start building the position
         """
         self.short_term = short_term
 
@@ -3011,7 +3163,7 @@ class LongPut(OptionStrategy):
                          sl_perc=100,
                          close_dte=21 if not short_term else 0,
                          close_perc=100,
-                         threshold=threshold)
+                         recommendation_threshold=recommendation_threshold)
 
     def _get_tasty_variation(self):
         """
@@ -3035,9 +3187,9 @@ class LongPut(OptionStrategy):
 
 class VerticalDebitSpread(OptionStrategy):
 
-    def __init__(self, env: EnvContainer, opt_type: str, threshold=DEFAULT_THRESHOLD):
+    def __init__(self, env: EnvContainer, opt_type: str, recommendation_threshold=DEFAULT_THRESHOLD):
         """
-        :param threshold: test_env must be greater than treshold in order to start building the position
+        :param recommendation_threshold: test_env must be greater than treshold in order to start building the position
         """
         self.opt_type = opt_type
 
@@ -3059,7 +3211,7 @@ class VerticalDebitSpread(OptionStrategy):
                          sl_perc=100,
                          close_dte=21,
                          close_perc=100,
-                         threshold=threshold)
+                         recommendation_threshold=recommendation_threshold)
 
     def _get_tasty_variation(self):
         """
@@ -3174,9 +3326,9 @@ class VerticalCreditSpread(OptionStrategy):
     # bullish = put spread
     # bearish = call spread
 
-    def __init__(self, env: EnvContainer, opt_type: str, threshold=DEFAULT_THRESHOLD, variation="tasty"):
+    def __init__(self, env: EnvContainer, opt_type: str, recommendation_threshold=DEFAULT_THRESHOLD, variation="tasty"):
         """
-        :param threshold: test_env must be greater than treshold in order to start building the position
+        :param recommendation_threshold: test_env must be greater than treshold in order to start building the position
         """
         self.opt_type = opt_type
 
@@ -3209,7 +3361,7 @@ class VerticalCreditSpread(OptionStrategy):
                          sl_perc=100,
                          close_dte=21,
                          close_perc=100,
-                         threshold=threshold)
+                         recommendation_threshold=recommendation_threshold)
 
     def _get_tasty_variation(self):
         """
@@ -3338,11 +3490,11 @@ class VerticalCreditSpread(OptionStrategy):
 class CalendarSpread(OptionStrategy):
     name = "Calendar Spread"
 
-    def __init__(self, threshold=DEFAULT_THRESHOLD):
+    def __init__(self, recommendation_threshold=DEFAULT_THRESHOLD):
         """
-        :param threshold: test_env must be greater than treshold in order to start building the position
+        :param recommendation_threshold: test_env must be greater than treshold in order to start building the position
         """
-        self.threshold = threshold
+        self.threshold = recommendation_threshold
         self.position_builder = self._get_tasty_variation
         self.conditions = {
             "IVR": [high_ivr],  # high_ivr, put functions here that return values from 0 to 1 or from -1 to 1
@@ -3369,7 +3521,7 @@ class CalendarSpread(OptionStrategy):
                          self.hints,
                          self.tp_percentage,
                          self.sl_percentage,
-                         threshold=threshold)
+                         recommendation_threshold=recommendation_threshold)
 
     def _get_tasty_variation(self, chain, u_bid, u_ask):
         """
@@ -3430,7 +3582,7 @@ class CashSecuredPut(OptionStrategy):  # todo -> wheel
 
 class CoveredCall(OptionStrategy):
 
-    def __init__(self, env: EnvContainer, threshold=DEFAULT_THRESHOLD):
+    def __init__(self, env: EnvContainer, recommendation_threshold=DEFAULT_THRESHOLD):
         conditions = {
             "IVR": [high_ivr],
 
@@ -3451,7 +3603,7 @@ class CoveredCall(OptionStrategy):
                          sl_perc=100,
                          close_dte=21,
                          close_perc=50,
-                         threshold=threshold)
+                         recommendation_threshold=recommendation_threshold)
 
     def _get_tasty_variation(self):
         oc = self.env_container.chain \
@@ -3509,14 +3661,21 @@ class CustomStratGenerator:
             delta_exp: ("eq", True),               -> True= ">=" 0, else False
             theta/delta: ("ge", 0.5),
             some_attribute_of_option_strat: (comparator, value)
+
+            simple_attributes = {"risk", "tp", "sl", "close_dte", "bpr", "max_gain",
+                                 "delta", "gamma", "vega", "theta", "rho",
+                                 "delta_exp", "gamma_exp", "vega_exp", "theta_exp", "rho_exp"}
+            complex_attributes = {"ptp", "prob_of_profit", "psl", "tp_med_d", "tp_avg_d", "close_pop", "close_pn"}
+
         """
 
         # todo maybe put the vertical spread part to the vertical spread class
 
         # can be computed without explicitly creating the combined position
-        simple_attributes = {"risk", "tp", "sl", "close_dte", "bpr", "max_gain",
+        simple_attributes = {"risk", "tp", "sl", "close_dte", "bpr", "max_gain", "rom", "rom50", "prof_time", "prof_time50",
                              "delta", "gamma", "vega", "theta", "rho",
                              "delta_exp", "gamma_exp", "vega_exp", "theta_exp", "rho_exp"}
+        complex_attributes = {"ptp", "prob_of_profit", "psl", "tp_med_d", "tp_avg_d", "close_pop", "close_pn", "e_tp_close"}
 
         private_chain = deepcopy(chain)
         if filters:
@@ -3578,7 +3737,7 @@ class CustomStratGenerator:
                             trade_cost = long_ask - short_bid
                             strike_diff = abs(long_strike - short_strike)
 
-                            risk = (strike_diff + trade_cost) * 100
+                            risk = trade_cost*100 if trade_cost > 0 else (strike_diff + trade_cost) * 100  # todo wrong?
                             bpr = risk
 
                             # for calls: (for puts inverted <>)
@@ -3600,6 +3759,8 @@ class CustomStratGenerator:
 
                             tp = tp_perc/100 * max_gain
                             sl = -1 if sl_perc == 100 else sl_perc/100 * risk
+                            rom = float('inf') if bpr == 0 else max_gain/bpr
+                            rom50 = rom/2
 
                             delta = long["delta"].iloc[0] + short["delta"].iloc[0]
                             gamma = long["gamma"].iloc[0] + short["gamma"].iloc[0]
@@ -3616,9 +3777,9 @@ class CustomStratGenerator:
                             # </editor-fold>
 
                             unfitting = False
-                            for param, val in target_param_dict.items():
+                            simple_to_test = [tup for tup in target_param_dict.items() if tup[0] in simple_attributes]
+                            for param, val in simple_to_test:
                                 # calls the function given by val[0] on local correspondant of param from dict
-                                # todo fails to detect negative delta?????
                                 if not eval(f'{param}.{"__" + val[0] + "__"}({val[1]})'):
                                     unfitting = True
                                     break
@@ -3651,19 +3812,6 @@ class CustomStratGenerator:
                             # print(pd.concat((long_leg.options, short_leg.options)).head())
                             comb_pos = OptionStrategy.build_comb_pos(env, long_leg, short_leg)
 
-                            """
-                                self.tp = 0
-                                self.close_pop = -1
-                                self.close_pn = -1
-                                self.tp_med_d = -1
-                                self.tp_avg_d = -1
-                                self.ptp = -1
-                                self.psl = -1
-                                self.prob_of_profit = -1
-                            """
-
-                            # check other specific conditions here6
-
                             def position_builder_function() -> CombinedPosition:
                                 return comb_pos
 
@@ -3673,15 +3821,28 @@ class CustomStratGenerator:
                                                        tp_perc=tp_perc,
                                                        sl_perc=sl_perc,
                                                        close_dte=latest_close_dte,
-                                                       threshold=-float('inf'))
+                                                       recommendation_threshold=-float('inf'))
+
+                            # check other specific conditions here
+
+                            hard_to_test = [tup for tup in target_param_dict.items() if tup[0] in complex_attributes]
+                            for param, val in hard_to_test:
+                                # calls the function given by val[0] on local correspondant of param from dict
+                                if not eval(f'opt_strat.{param}.{"__" + val[0] + "__"}({val[1]})'):
+                                    #print(opt_strat)
+                                    """x = f'opt_strat.{param}'
+                                    print(f'{param}: opt_strat.{param} = {eval(x)} not {val[0]}({val[1]})')"""
+                                    unfitting = True
+                                    break
+                                else:
+                                    _debug(f'{param}: opt_strat.{param}.{"__" + val[0] + "__"}({val[1]}) = True', 3)
+
+                            if unfitting:
+                                break
 
                             yield opt_strat
 
-                            # if we got here, build the position as it fits all criteria
-                            # strats_to_return.append(opt_strat)
-
         # </editor-fold>
-
 
 # </editor-fold>
 
@@ -3844,7 +4005,7 @@ def test_greeks():
 
 if __name__ == "__main__":
 
-    # TODO FIX GIANT WHITESPACE!!!
+    # TODO pretty representation of option chain, yk
 
     # todo pops differ for 0 dte
     # todo supply position and get all the stuff from option strat, "watcha think bout dis"
@@ -3879,10 +4040,14 @@ if __name__ == "__main__":
 
     t = "amc"
     ssc = {
-        "tp": ("gt", 10),
-        "risk": ("le", 100),
-        "delta": ("lt", 0)
+        "risk": ("le", 150),
+        "rom": ("le", 1),    # just to prefilter and make things faster
+        "e_tp_close": ("ge", 10),
     }
+    f = [
+        [OptionChain.volume, 10],
+        #[OptionChain.expiration_close_to_dte, 45]
+    ]
     #"""
     propose_strategies(t,
                        StrategyConstraints(strict_mode=False,
@@ -3893,8 +4058,7 @@ if __name__ == "__main__":
                        auto=False,
                        use_predefined_strats=False,
                        single_strat_cons=ssc,
-                       filters=[[OptionChain.volume, 50],
-                                [OptionChain.expiration_close_to_dte, 45]])
+                       filters=f)
     # """
 
     # get_market_recommendations(get_trending_theta_strat_tickers)

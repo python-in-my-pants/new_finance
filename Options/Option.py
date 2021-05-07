@@ -61,7 +61,7 @@ class Option:
         self.bid = self.ask
 
     def __str__(self):
-        return f'{date_to_opt_format(self.expiration)} {self.opt_type.upper()} {self.strike} @ {self.bid: >3.2f}/{self.ask: >3.2f}'
+        return f'{date_to_opt_format(self.expiration)} {self.opt_type.upper()} {self.strike: >4.2f} @ {self.bid: >3.2f}/{self.ask: >3.2f}'
 
     @staticmethod
     def from_row(row):

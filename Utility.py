@@ -3,9 +3,6 @@ from numpy import median
 import sys
 
 
-
-
-
 def interactive():
 
     print("Interactive mode on! Type 'exit' to return to normal mode.")
@@ -25,7 +22,7 @@ def timeit(func):
     def inner(*args, **kwargs):
         start = time.time()
         retval = func(*args, **kwargs)
-        print("{} finished in {}".format(func.__name__, seconds_to_timestamp(time.time()-start)))
+        print("\n{} finished in {}".format(func.__name__, seconds_to_timestamp(time.time()-start)))
         return retval
     return inner
 
