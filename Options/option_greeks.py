@@ -736,23 +736,55 @@ def _gbs(option_type, fs, x, t, r, b, v):
     if option_type == "c":
         # it's a call
         _debug("     Call Option")
-        value = fs * math.exp((b - r) * t) * norm._cdf(d1) - x * math.exp(-r * t) * norm._cdf(d2)
-        delta = math.exp((b - r) * t) * norm._cdf(d1)
-        gamma = math.exp((b - r) * t) * norm._pdf(d1) / (fs * v * t__sqrt)
-        theta = -(fs * v * math.exp((b - r) * t) * norm._pdf(d1)) / (2 * t__sqrt) - (b - r) * fs * math.exp(
-            (b - r) * t) * norm._cdf(d1) - r * x * math.exp(-r * t) * norm._cdf(d2)
-        vega = math.exp((b - r) * t) * fs * t__sqrt * norm._pdf(d1)
-        rho = x * t * math.exp(-r * t) * norm._cdf(d2)
+
+        try:
+            norm_cdf_d1 = norm._cdf(d1)
+        except FloatingPointError:
+            norm_cdf_d1 = 0
+
+        try:
+            norm_cdf_d2 = norm._cdf(d2)
+        except FloatingPointError:
+            norm_cdf_d2 = 0
+
+        try:
+            norm_pdf_d1 = norm._pdf(d1)
+        except FloatingPointError:
+            norm_pdf_d1 = 0
+
+        value = fs * math.exp((b - r) * t) * norm_cdf_d1 - x * math.exp(-r * t) * norm_cdf_d2
+        delta = math.exp((b - r) * t) * norm_cdf_d1
+        gamma = math.exp((b - r) * t) * norm_pdf_d1 / (fs * v * t__sqrt)
+        theta = -(fs * v * math.exp((b - r) * t) * norm_pdf_d1) / (2 * t__sqrt) - (b - r) * fs * math.exp(
+            (b - r) * t) * norm_cdf_d1 - r * x * math.exp(-r * t) * norm_cdf_d2
+        vega = math.exp((b - r) * t) * fs * t__sqrt * norm_pdf_d1
+        rho = x * t * math.exp(-r * t) * norm_cdf_d2
     else:
         # it's a put
         _debug("     Put Option")
-        value = x * math.exp(-r * t) * norm._cdf(-d2) - (fs * math.exp((b - r) * t) * norm._cdf(-d1))
-        delta = -math.exp((b - r) * t) * norm._cdf(-d1)
-        gamma = math.exp((b - r) * t) * norm._pdf(d1) / (fs * v * t__sqrt)
-        theta = -(fs * v * math.exp((b - r) * t) * norm._pdf(d1)) / (2 * t__sqrt) + (b - r) * fs * math.exp(
-            (b - r) * t) * norm._cdf(-d1) + r * x * math.exp(-r * t) * norm._cdf(-d2)
-        vega = math.exp((b - r) * t) * fs * t__sqrt * norm._pdf(d1)
-        rho = -x * t * math.exp(-r * t) * norm._cdf(-d2)
+
+        try:
+            norm_cdf_md1 = norm._cdf(-d1)
+        except FloatingPointError:
+            norm_cdf_md1 = 0
+
+        try:
+            norm_cdf_md2 = norm._cdf(-d2)
+        except FloatingPointError:
+            norm_cdf_md2 = 0
+
+        try:
+            norm_pdf_d1 = norm._pdf(d1)
+        except FloatingPointError:
+            norm_pdf_d1 = 0
+
+        value = x * math.exp(-r * t) * norm_cdf_md2 - (fs * math.exp((b - r) * t) * norm_cdf_md1)
+        delta = -math.exp((b - r) * t) * norm_cdf_md1
+        gamma = math.exp((b - r) * t) * norm_pdf_d1 / (fs * v * t__sqrt)
+        theta = -(fs * v * math.exp((b - r) * t) * norm_pdf_d1) / (2 * t__sqrt) + (b - r) * fs * math.exp(
+            (b - r) * t) * norm_cdf_md1 + r * x * math.exp(-r * t) * norm_cdf_md2
+        vega = math.exp((b - r) * t) * fs * t__sqrt * norm_pdf_d1
+        rho = -x * t * math.exp(-r * t) * norm_cdf_md2
 
     _debug("     d1= {0}\n     d2 = {1}".format(d1, d2))
     _debug("     delta = {0}\n     gamma = {1}\n     theta = {2}\n     vega = {3}\n     rho={4}".format(delta, gamma,
@@ -997,6 +1029,7 @@ def _psi(fs, t2, gamma, h, i2, i1, t1, r, b, v):
     lambda1 = (-r + gamma * b + 0.5 * gamma * (gamma - 1) * (v ** 2))
     kappa = (2 * b) / (v ** 2) + (2 * gamma - 1)
 
+    # underflow encountered in double_scalars
     psi = math.exp(lambda1 * t2) * (fs ** gamma) * (_cbnd(-d1, -e1, tau)
                                                     - ((i2 / fs) ** kappa) * _cbnd(-d2, -e2, tau)
                                                     - ((i1 / fs) ** kappa) * _cbnd(-d3, -e3, -tau)

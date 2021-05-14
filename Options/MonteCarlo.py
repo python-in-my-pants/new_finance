@@ -17,8 +17,20 @@ import random
 from pprint import pprint as pp
 from Utility import flatten
 from pandasgui import show
+from datetime import datetime, timedelta, date
 
 debug = False
+
+"""
+options for IV:
+- use first exp month options IV
+- use positions option IV (higher / lower ?)
+- historic IV (all data)
+- 1 year IV
+
+option for supposed price prob dist:
+- sum all implied price dists from options of certain month and weight them by open interest
+"""
 
 
 class MonteCarloSimulator(object):
@@ -41,13 +53,13 @@ class MonteCarloSimulator(object):
         tickers.append("msft")
         tickers.sort()
         self.tickers = [t.lower() for t in tickers]
-        self.daily_close_prices_all_tickers = self.load_stock_data_dict(tickers)  # ticker ->
+        self.daily_close_prices_all_tickers = self.load_stock_data_dict(self.tickers)  # ticker ->
 
         """for ticker in self.tickers:
             df = self.daily_close_prices_all_tickers[ticker.upper()].dropna()
             print(f'Ticker: {ticker} === Var: {df.var()}, Avg: {df.mean()}, Median: {df.median()}')"""
 
-        self.sim_df = self.monte_carlo(tickers, days_forecast=days, iterations=iterations)
+        self.sim_df = self.monte_carlo(self.tickers, days_forecast=days, iterations=iterations)
         self.days = days
         if debug:
             print("Finished building monte carlo simulator!")
@@ -72,15 +84,14 @@ class MonteCarloSimulator(object):
     @staticmethod
     def download_stock_data(tickers: list) -> pd.DataFrame:
         data = pd.DataFrame()
+        one_year_earlier = (datetime.strptime(date.today(), '%Y-%m-%d') - timedelta(days=365)).strftime('%Y-%m-%d')
         if debug:
             print("Downloading history for", tickers)
         if len(tickers) == 1:
-            data[tickers] = wb.DataReader(tickers, data_source='yahoo', start='2010-1-1')['Adj Close']
-            data = pd.DataFrame(data)
+            data[tickers] = wb.DataReader(tickers, data_source='yahoo', start=one_year_earlier)['Adj Close']
         else:
-            data = wb.DataReader(tickers, data_source='yahoo', start='2010-1-1')['Adj Close']
-        # data = data["ticker"].apply(lambda x: x.lower())
-        return data  # .fillna(value=0)
+            data = wb.DataReader(tickers, data_source='yahoo', start=one_year_earlier)['Adj Close']
+        return data
 
     def load_stock_data_dict(self, tickers: list = None) -> pd.DataFrame:
         try:
@@ -110,7 +121,7 @@ class MonteCarloSimulator(object):
     def simple_returns(self, data):
         return (data / data.shift(1)) - 1
 
-    def drift_calc(self, data, return_type='simple'):
+    def drift_calc(self, data, return_type='log'):
         if return_type == 'log':
             lr = self.log_returns(data)
         elif return_type == 'simple':
@@ -126,7 +137,7 @@ class MonteCarloSimulator(object):
         except:
             return drift
 
-    def daily_returns(self, _data, days, iterations, return_type='simple'):
+    def daily_returns(self, _data, days, iterations, return_type='log'):
 
         data = _data.dropna()
         ft = self.drift_calc(data, return_type)
@@ -248,21 +259,23 @@ class MonteCarloSimulator(object):
 
     def get_pop(self, ticker, days, break_even, best_u_price, delta):
 
-        end_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[days, 1:].astype('float')
-        #print(f'Var: {end_stock_prices.var()}, Avg: {end_stock_prices.mean()}, Median: {end_stock_prices.median()}')
+        try:
+            end_stock_prices = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[days, 1:].astype('float')
+        except IndexError as e:
+            print(self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].head(10))
+            print(f'Index Error: {e}, Days: {days}, Ticker: {ticker}, \nDf["ticker"]: {set(self.sim_df["ticker"])},\n'
+                  f'Shape: {self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].shape}')
+            raise e
+        # print(f'Var: {end_stock_prices.var()}, Avg: {end_stock_prices.mean()}, Median: {end_stock_prices.median()}')
 
         if best_u_price > break_even:  # directional long
-            show(end_stock_prices.loc[end_stock_prices > break_even])
             return len(end_stock_prices.loc[end_stock_prices > break_even]) / len(end_stock_prices)
         if best_u_price < break_even:  # directional short
-            show(end_stock_prices.loc[end_stock_prices < break_even])
             return len(end_stock_prices.loc[end_stock_prices < break_even]) / len(end_stock_prices)
-        if best_u_price == break_even:  # todo does this even make sense?
+        if best_u_price == break_even:  # todo does this even make sense? NO, delta can be shit due to far OTM
             if delta > 0:  # directional long
-                show(end_stock_prices.loc[end_stock_prices > break_even])
                 return len(end_stock_prices.loc[end_stock_prices > break_even]) / len(end_stock_prices)
             if delta < 0:  # directional short
-                show(end_stock_prices.loc[end_stock_prices < break_even])
                 return len(end_stock_prices.loc[end_stock_prices < break_even]) / len(end_stock_prices)
         else:
             print(f'Something went wrong getting pop: '
@@ -270,6 +283,19 @@ class MonteCarloSimulator(object):
             ...
             # todo complex curves like butterflies & condors & such
             return -1
+
+    # for debugging purposes only
+    def get_pop_dist(self, ticker, days, break_even, best_u_price, delta):
+        df = self.sim_df.loc[self.sim_df["ticker"] == ticker.lower()].iloc[days, 1:].astype('float')
+        if best_u_price > break_even:
+            return df, df.loc[df > break_even]
+        if best_u_price < break_even:
+            return df, df.loc[df < break_even]
+        if best_u_price == break_even:
+            if delta > 0:
+                return df, df.loc[df > break_even]
+            else:
+                return df, df.loc[df < break_even]
 
     @timeit
     def get_pn_psl(self, option_strat, risk_free_rate,
@@ -280,6 +306,9 @@ class MonteCarloSimulator(object):
          -> already done by assuming fill at nat instead of mid, we pay the full spread on entry
 
         TODO shorts make this faulty
+
+        TODO return underlying prices building the Pn curve & the break even curve each day
+         (u price of opt price closest to 0 / closest to tp)
 
         :param outer_iterations:
         :param with_plots:
@@ -391,16 +420,23 @@ class MonteCarloSimulator(object):
         # ############################################################################################################ #
 
         def track_price_paths(a, b):
+            """
+
+            :param a: start at this iteration
+            :param b: end
+            :return:
+            """
 
             # now we track the paths of mc simulations along strat_gains
             done_iterations = set()
+            done_iter_until_close = set()
 
             tp_hit_days = 0
             tp_hit_days_list = []
-            tp_hit_days_b4_close = 0
+            tp_hits_before_close = 0
 
             sl_hit_days = 0
-            sl_hit_days_b4_close = 0
+            sl_hits_before_close = 0
 
             gains_at_close = []
             gains_at_day = [[0 for _ in range(b-a)] for _ in range(first_dte+1)]
@@ -415,9 +451,12 @@ class MonteCarloSimulator(object):
                 tp_hits_b4 = tp_hit_days
                 tp_hits_this_day = 0
 
+                if d == close_days+1:  # day after close
+                    done_iter_until_close = done_iterations
+
                 for i, sim_stock_price in enumerate(simulated_stock_prices.iloc[d, a:b].to_list()):  # iterate over iterations
 
-                    # result of this iteration is already clear
+                    # result of this iteration is already clear (sl hit/tp hit)
                     if i in done_iterations:
                         continue
 
@@ -444,13 +483,13 @@ class MonteCarloSimulator(object):
                         tp_hit_days_list.append(d)
                         if d < close_days:  # has to be < instead of <= bc for close pop, we already count gains_at_close,
                             # otherwise tp hits on close day would be counted twice
-                            tp_hit_days_b4_close += 1
+                            tp_hits_before_close += 1
                         continue
                     if gain <= sl:
                         done_iterations.add(i)
                         sl_hit_days += 1
                         if d < close_days:
-                            sl_hit_days_b4_close += 1
+                            sl_hits_before_close += 1
                         continue
 
                 if debug and tp_hit_days > 0 and (tp_hit_days-tp_hits_b4) / tp_hit_days > 0.30:
@@ -459,6 +498,7 @@ class MonteCarloSimulator(object):
                           f'\n\tAvg gain: {sum([gains_at_day[d][i] for i in range(b-a)])/(b-a)},'
                           f'\n\tAvg price: {sum(simulated_stock_prices.loc[d, :].to_list())/(b-a)}')
 
+            # <editor-fold desc="stuff">
             # ######################################################################################################## #
 
             if debug:
@@ -519,6 +559,7 @@ class MonteCarloSimulator(object):
                 #"""
 
             # ######################################################################################################## #
+            # </editor-fold>
 
             if tp_hit_days_list:
                 _tp_d_avg = sum(tp_hit_days_list) / len(tp_hit_days_list)
@@ -529,21 +570,24 @@ class MonteCarloSimulator(object):
 
             # todo (len(gains_at_close) + tp_hit_days_b4_close + sl_hit_days_b4_close)
             #  ZeroDivisionError: division by zero
-            _close_pop = (sum([1 for x in gains_at_close if x > 0]) + tp_hit_days_b4_close - sl_hit_days_b4_close) / \
-                         (len(gains_at_close) + tp_hit_days_b4_close + sl_hit_days_b4_close)
+            pop_hits_at_close = [1 for i, x in enumerate(gains_at_close) if x > 0 and i not in done_iter_until_close]
+            _close_pop = (sum(pop_hits_at_close) + tp_hits_before_close - sl_hits_before_close) / \
+                         (len(gains_at_close) + tp_hits_before_close + sl_hits_before_close)
 
-            _close_pn = (sum([1 for x in gains_at_close if x >= tp]) + tp_hit_days_b4_close) / \
-                        (len(gains_at_close) + tp_hit_days_b4_close)
+            # todo this overstates bc it counts tp_hit_days_b4 close double bc they may also be above tp in gains@close
+            tp_hits_at_close = [1 for i, x in enumerate(gains_at_close) if x >= tp and i not in done_iter_until_close]
+            _close_pn = (sum(tp_hits_at_close) + tp_hits_before_close - sl_hits_before_close) / \
+                        (len(gains_at_close) + tp_hits_before_close + sl_hits_before_close)
 
             if debug:
                 print(f'\n'
                       f' Gains at close > 0: {sum([1 for x in gains_at_close if x > 0])},\n'
-                      f'   TP hits b4 close: {tp_hit_days_b4_close}\n'
-                      f'   SL hits b4 close: {sl_hit_days_b4_close}\n'
+                      f'   TP hits b4 close: {tp_hits_before_close}\n'
+                      f'   SL hits b4 close: {sl_hits_before_close}\n'
                       f' Gains at close len: {len(gains_at_close)}')
                 print(f'          Close PoP: {_close_pop}\n')
                 print(f'G@clo >= TP of {tp}: {sum([1 for x in gains_at_close if x >= tp])},\n'
-                      f'   TP hits b4 close: {tp_hit_days_b4_close}\n'
+                      f'   TP hits b4 close: {tp_hits_before_close}\n'
                       f' Gains at close len: {len(gains_at_close)}')
                 print(f'           Close PN: {_close_pn}\n')
 
@@ -558,6 +602,7 @@ class MonteCarloSimulator(object):
         if batch_size < 10:
             outer_iterations = 1
 
+        # todo use median instead of avg
         p_tp, p_sl, tp_d_med, tp_d_avg, close_pop, close_pn = 0, 0, 0, 0, 0, 0
 
         for outer_loop_iter in range(outer_iterations):

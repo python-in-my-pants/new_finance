@@ -22,8 +22,8 @@ from pprint import pprint as pp, pformat as pf
 from Utility import timeit
 from pandasgui import show
 from collections import OrderedDict
-
-
+from scipy.stats import norm
+import traceback
 
 """
 import ipdb
@@ -40,7 +40,7 @@ debug = True
 debug_level = 1
 
 ACCOUNT_BALANCE = 1471
-DEFAULT_THRESHOLD = -1
+DEFAULT_THRESHOLD = .3
 
 #np.seterr(all='raise')
 
@@ -48,7 +48,7 @@ DEFAULT_THRESHOLD = -1
 # <editor-fold desc="Miscellaneous">
 
 def _warn(msg, level=3):
-    warnings.warn("\n\n\t" + msg + "\n", stacklevel=level)
+    warnings.warn("\n\t" + msg, stacklevel=level)
 
 
 if not online:
@@ -595,8 +595,8 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
         return []
 
     print(f'\nStock info:\n\n'
-          f'                   Stock bid: {meta.u_bid}\n'
-          f'                   Stock ask: {meta.u_ask}\n'
+          f'                   Stock bid: {meta.u_bid:.2f} $\n'
+          f'                   Stock ask: {meta.u_ask:.2f} $\n'
           f'                      Sector: {meta.sector if meta.sector else "N/A"}\n'
           f'                         IVR: {meta.ivr}\n'
           f'                      RSI 20: {meta.rsi20}\n'
@@ -795,12 +795,13 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
                 # todo make the legs dataframes, otherwise only the last leg is shown
                 pos_df = pd.concat([pos_df, pos.to_df()], copy=False, ignore_index=True)
                 # pos.positions.plot_profit_dist_on_first_exp()
-        show(pos_df.transpose())
-
+        try:
+            show(pos_df)
+        except Exception:
+            pass
 
 
 # <editor-fold desc="Option Framework">
-
 
 class Stock:
 
@@ -890,7 +891,9 @@ class Position:
         indent = "\t" * t
         voloi = ""
         if type(self.asset) is Option:
-            voloi = f'(OI: {int(self.asset.oi):>8d},  Vol: {int(self.asset.vol):>8d})'
+            voloi = f'(OI: {int(self.asset.oi):>8d},  ' \
+                    f'Vol: {int(self.asset.vol):>8d}, ' \
+                    f'ImpVol: {float(self.asset.iv) * 100: >3.2f} %)'
         return f'{indent}{self.quantity:+d} {self.asset} = {self.cost:+.2f} $\t\t{voloi}'
 
     def repr(self, t=0):
@@ -905,7 +908,7 @@ class Position:
                f'Θ = {self.greeks["theta"]:+.5f}   ' \
                f'ρ = {self.greeks["rho"]:+.5f}     ' \
                f'\n' \
-               f'{indent}\tMax risk: {self.risk:.2f} $' \
+               f'{indent}\tMax risk: {self.risk:.2f} $ {"(NO RISK FOUND)" if self.risk <= 0 else ""}' \
                f'\n' \
                f'{indent}\tBPR:      {self.bpr:.2f} $' \
                f'\n' \
@@ -1793,7 +1796,8 @@ class OptionChain:
 # todo TEST!
 class CombinedPosition:
 
-    def __init__(self, pos_dict: Dict[str, Position], u_bid: float, u_ask: float, ticker: str, mcs: MonteCarloSimulator):
+    def __init__(self, pos_dict: Dict[str, Position], u_bid: float, u_ask: float, ticker: str,
+                 mcs: MonteCarloSimulator):
         """
         :param pos_dict:  (option symbol/stock ticker): position
         """
@@ -1905,6 +1909,8 @@ class CombinedPosition:
                f'\n' \
                f'{indent}                 Max profit: {self.max_profit:>+6.2f} $' \
                f'\n' \
+               f'{indent}           Max profit point: {self.max_profit_point:>+6.2f} $' \
+               f'\n' \
                f'{indent}                   Max risk: {self.risk:>+6.2f} $' \
                f'\n' \
                f'{indent}                        BPR: {self.bpr:>+6.2f} $' \
@@ -1925,7 +1931,7 @@ class CombinedPosition:
                f'{indent}                Half profit: {self.max_profit / 2:+6.2f} $' \
                f'\n' \
                f'{indent}           Return on margin: {self.rom * 100:.2f}%' \
-               f'\n'\
+               f'\n' \
                f'{indent}Return on margin (TP @ 50%): {self.rom50 * 100:.2f}%' \
                f'\n' \
                f'{indent}           Max profit / DTE: {self.prof_time:.2f}' \
@@ -1991,9 +1997,9 @@ class CombinedPosition:
         self.break_even = self.get_break_even()
         self.max_profit, self.max_profit_point = self.get_max_profit()
         self.rom = self.get_rom()
-        self.rom50 = self.rom/2
-        self.prof_time = self.max_profit/max(1, self.dte_until_first_exp())
-        self.prof_time50 = self.prof_time/2
+        self.rom50 = self.rom / 2
+        self.prof_time = self.max_profit / max(1, self.dte_until_first_exp())
+        self.prof_time50 = self.prof_time / 2
 
         # pop ptp psl
         # todo mcs gives only option value? what about naked shorts for example? stock in comb pos? ->
@@ -2002,7 +2008,8 @@ class CombinedPosition:
 
     def set_expected_move(self, iv):
         # TODO make dte a float with day ending at market close
-        self.expected_move = iv * self.u_mid * (self.dte_until_first_exp()+1) / 365.0
+        std_dev = iv * ((self.dte_until_first_exp() + .1) / 365) ** 0.5
+        self.expected_move = std_dev * self.u_mid
 
     def dte_until_first_exp(self):
         return date_str_to_dte(min([p.asset.expiration for p in self.pos_dict.values() if type(p.asset) is Option]))
@@ -2029,6 +2036,8 @@ class CombinedPosition:
         #  cov_pairs[short_pos_name1] = [covering_1=A, covering_2=B, ...]
         #  cov_pairs[short_pos_name2] = [covering_1=B, covering_2=C, ...]
         #  and update it when options expire
+
+        # todo even if long stock is covering sth, it still has to be covered itself by a long put
 
         positions = deepcopy(list(self.pos_dict.values()))
 
@@ -2058,7 +2067,6 @@ class CombinedPosition:
 
             # select highest strike put
             long_puts.sort(key=lambda x: x.asset.strike, reverse=True)
-            high_put_pos = long_puts[0]
 
             to_cover = stock.quantity
 
@@ -2119,7 +2127,7 @@ class CombinedPosition:
                     # is there any long stock?
                     if stock.quantity > 0:
                         long_q = stock.quantity
-                        stock.add_x(-min(to_cover * 100, long_q))
+                        # stock.add_x(-min(to_cover * 100, long_q))
                         to_cover -= min(to_cover, long_q / 100)
 
                         risk += position_to_cover.cost / 100
@@ -2292,10 +2300,10 @@ class CombinedPosition:
                     raise NotImplementedError("Allowed modes are 'binomial' and 'bjerksund'")
 
                 if leg.cost >= 0:
-                    leg_gain = future_leg_price*100 - leg.cost
+                    leg_gain = future_leg_price * 100 - leg.cost
                     long_gain = leg_gain
                 else:  # short leg
-                    leg_gain = -(future_leg_price*100 + leg.cost)
+                    leg_gain = -(future_leg_price * 100 + leg.cost)
                     short_gain = leg_gain
 
             elif dte == 0:
@@ -2454,7 +2462,7 @@ class CombinedPosition:
     def get_max_profit_on_first_exp(self):
         d = self.profit_dist_at_first_exp
         m = max(d)
-        return m, d.index(m)/100
+        return m, d.index(m) / 100
 
     def get_profit_dist_on_first_exp(self):
         options = [p for p in list(self.pos_dict.values()) if type(p.asset) is Option]
@@ -2639,6 +2647,7 @@ class EnvContainer:
         self.chain = chain
         self.u_bid = u_bid
         self.u_ask = u_ask
+        self.u_mid = (u_bid + u_ask) / 2
         self.ticker = ticker
         self.min_per_option_vol = min_per_option_vol
 
@@ -2698,6 +2707,8 @@ class OptionStrategy:
         self.tp_med_d = -1
         self.tp_avg_d = -1
         self.close_pop = -1
+        self.implied_pop = -1
+        self.implied_pop_at_close = -1
         self.close_pn = -1
         self.e_tp_close = -1  # close_pn * tp_percentaga/100 * max_gain
         self.greek_exposure = None  # set after environment check
@@ -2763,12 +2774,16 @@ class OptionStrategy:
                f'\n' \
                f'{indent} PoP at close: {self.close_pop * 100: >3.2f} %' \
                f'\n' \
+               f'{indent} ImpPoP@close: {self.implied_pop_at_close * 100: >3.2f} %' \
+               f'\n' \
                f'{indent} P{int(self.tp_percentage)} at close: {self.close_pn * 100: >3.2f} %' \
                f'\n' \
                f'{indent}    Avg to TP: {int(self.tp_avg_d + 0.5)} days\t\t\tMed to TP: {int(self.tp_med_d)} days' \
                f'\n' \
                f'\n' \
                f'{indent}   PoP at exp: {self.prob_of_profit * 100: >3.2f} %' \
+               f'\n' \
+               f'{indent}  Implied PoP: {self.implied_pop * 100: >3.2f} %' \
                f'\n' \
                f'{indent}   P{int(self.tp_percentage)} at exp: {self.ptp * 100: >3.2f} %' \
                f'\n' \
@@ -2898,8 +2913,11 @@ class OptionStrategy:
                                 list(condition_dict.items()) +
                                 list(test_res_dict.items()) +
                                 cpos_dict)
+        i = 0
         for leg_dict in leg_dicts:
-            full_dict.update(leg_dict)
+            if leg_dict["l_quantity"] != 0:
+                i += 1
+                full_dict.update({"leg " + str(i) + " " + key.split("_")[1]: value for key, value in leg_dict.items()})
 
         df = pd.DataFrame(full_dict, index=[0])
         return df
@@ -3019,6 +3037,13 @@ class OptionStrategy:
 
         prob_dict = self.positions.mcs.get_pop_pn_sl(self,
                                                      get_risk_free_rate(self.positions.dte_until_first_exp()))
+        """clean, sel = self.positions.mcs.get_pop_dist(self.env_container.ticker,
+                                                     self.positions.dte_until_first_exp(),
+                                                     self.positions.break_even,
+                                                     self.positions.max_profit_point,
+                                                     self.positions.greeks["delta"])"""
+        # tmp = pd.DataFrame({"close": clean, "be": sel}).sort_values(by=["close"]).reset_index()
+        # show(tmp)
         self.ptp = prob_dict.p_tp
         self.prob_of_profit = prob_dict.prob_of_profit
         self.psl = prob_dict.p_sl
@@ -3026,7 +3051,30 @@ class OptionStrategy:
         self.tp_avg_d = prob_dict.tp_avg
         self.close_pop = prob_dict.close_pop
         self.close_pn = prob_dict.close_pn
-        self.e_tp_close = self.tp_percentage/100 * self.positions.max_profit * self.close_pn
+        self.e_tp_close = self.tp_percentage / 100 * self.positions.max_profit * self.close_pn
+
+        # implied by option IVs
+
+        opt_ivs = [opt.asset.iv for opt in self.positions.pos_dict.values() if type(opt.asset) is Option]
+        avg_imp_vol = sum(opt_ivs) / len(opt_ivs)
+        dtfe = self.positions.dte_until_first_exp()
+        # divide by root of time to get std dev over other timeframes != 1
+        std_dev = avg_imp_vol * ((dtfe + 0.1) / 365.0) ** 0.5
+        # loc=mean, scale=std dev
+        implied_pop = norm.cdf(self.positions.break_even, loc=self.env_container.u_mid, scale=std_dev)
+
+        # imp pop at close
+        std_dev = avg_imp_vol * ((datetime_to_dte(self.close_date) + .1) / 365.0) ** 0.5
+        implied_pop_at_close = norm.cdf(self.positions.break_even, loc=self.env_container.u_mid, scale=std_dev)
+
+        if self.positions.break_even > self.positions.max_profit_point or \
+                (self.positions.break_even == self.positions.max_profit_point and self.positions.greeks["delta"] <= 0):
+            self.implied_pop = implied_pop
+            self.implied_pop_at_close = implied_pop_at_close
+        if self.positions.break_even < self.positions.max_profit_point or \
+                (self.positions.break_even == self.positions.max_profit_point and self.positions.greeks["delta"] > 0):
+            self.implied_pop = 1 - implied_pop
+            self.implied_pop_at_close = 1 - implied_pop_at_close
 
     def _check_liquidity(self):
         return self._check_bid_ask_spread() and self._check_vol()
@@ -3672,10 +3720,16 @@ class CustomStratGenerator:
         # todo maybe put the vertical spread part to the vertical spread class
 
         # can be computed without explicitly creating the combined position
-        simple_attributes = {"risk", "tp", "sl", "close_dte", "bpr", "max_gain", "rom", "rom50", "prof_time", "prof_time50",
+        simple_attributes = {"risk", "tp", "sl", "close_dte", "bpr", "max_gain", "rom", "rom50", "prof_time",
+                             "prof_time50",
                              "delta", "gamma", "vega", "theta", "rho",
                              "delta_exp", "gamma_exp", "vega_exp", "theta_exp", "rho_exp"}
-        complex_attributes = {"ptp", "prob_of_profit", "psl", "tp_med_d", "tp_avg_d", "close_pop", "close_pn", "e_tp_close"}
+        complex_attributes = {"ptp", "prob_of_profit", "psl", "tp_med_d", "tp_avg_d", "close_pop", "close_pn",
+                              "e_tp_close"}
+
+        if any([True for key in target_param_dict.keys()
+                if key not in simple_attributes and key not in complex_attributes]):
+            raise RuntimeError("Unsupported key provided!")
 
         private_chain = deepcopy(chain)
         if filters:
@@ -3685,7 +3739,7 @@ class CustomStratGenerator:
 
         # <editor-fold desc="Vertical Spread">
 
-        strats_to_return = []
+        strat_name_counter = 0
 
         # set tp perc & sl perc
         tp_perc = 50
@@ -3695,7 +3749,7 @@ class CustomStratGenerator:
         # if no probs or complicated parameters are given in target_param_dict, compute simple params manually
 
         # difference set is empty = no complicated attributes present
-        #if not set(target_param_dict.keys()) - simple_attributes:
+        # if not set(target_param_dict.keys()) - simple_attributes:
 
         for opt_type in ["p", "c"]:
 
@@ -3737,7 +3791,8 @@ class CustomStratGenerator:
                             trade_cost = long_ask - short_bid
                             strike_diff = abs(long_strike - short_strike)
 
-                            risk = trade_cost*100 if trade_cost > 0 else (strike_diff + trade_cost) * 100  # todo wrong?
+                            risk = trade_cost * 100 if trade_cost > 0 else (
+                                                                                       strike_diff + trade_cost) * 100  # todo wrong?
                             bpr = risk
 
                             # for calls: (for puts inverted <>)
@@ -3757,10 +3812,10 @@ class CustomStratGenerator:
                                 else:  # short strike > long strike
                                     max_gain = (strike_diff - trade_cost) * 100
 
-                            tp = tp_perc/100 * max_gain
-                            sl = -1 if sl_perc == 100 else sl_perc/100 * risk
-                            rom = float('inf') if bpr == 0 else max_gain/bpr
-                            rom50 = rom/2
+                            tp = tp_perc / 100 * max_gain
+                            sl = -1 if sl_perc == 100 else sl_perc / 100 * risk
+                            rom = float('inf') if bpr == 0 else max_gain / bpr
+                            rom50 = rom / 2
 
                             delta = long["delta"].iloc[0] + short["delta"].iloc[0]
                             gamma = long["gamma"].iloc[0] + short["gamma"].iloc[0]
@@ -3815,7 +3870,7 @@ class CustomStratGenerator:
                             def position_builder_function() -> CombinedPosition:
                                 return comb_pos
 
-                            opt_strat = OptionStrategy(name="Custom Vertical Spread",
+                            opt_strat = OptionStrategy(name="Custom Vertical Spread #" + str(strat_name_counter),
                                                        position_builder=position_builder_function,
                                                        env=env,
                                                        tp_perc=tp_perc,
@@ -3823,13 +3878,15 @@ class CustomStratGenerator:
                                                        close_dte=latest_close_dte,
                                                        recommendation_threshold=-float('inf'))
 
+                            strat_name_counter += 1
+
                             # check other specific conditions here
 
                             hard_to_test = [tup for tup in target_param_dict.items() if tup[0] in complex_attributes]
                             for param, val in hard_to_test:
                                 # calls the function given by val[0] on local correspondant of param from dict
                                 if not eval(f'opt_strat.{param}.{"__" + val[0] + "__"}({val[1]})'):
-                                    #print(opt_strat)
+                                    # print(opt_strat)
                                     """x = f'opt_strat.{param}'
                                     print(f'{param}: opt_strat.{param} = {eval(x)} not {val[0]}({val[1]})')"""
                                     unfitting = True
@@ -3843,6 +3900,7 @@ class CustomStratGenerator:
                             yield opt_strat
 
         # </editor-fold>
+
 
 # </editor-fold>
 
@@ -3875,7 +3933,8 @@ def get_trending_theta_strat_tickers():
 # </editor-fold>
 
 
-def get_market_recommendations(ticker_f, start_from=None):
+def get_market_recommendations(ticker_f, start_from=None, use_predef=False, _ssc=dict(), _filters=list()):
+    print(f"[{get_timestamp()}] Start getting market recommendations")
     constraints = StrategyConstraints(strict_mode=False, min_oi30=100, min_vol30=1000, min_sinle_opt_vol=0)
     tickers = ticker_f()
     mcs = MonteCarloSimulator(tickers)
@@ -3883,9 +3942,13 @@ def get_market_recommendations(ticker_f, start_from=None):
         tickers = tickers[tickers.index(start_from):]
     for t in tickers:
         try:
-            propose_strategies(t, constraints, mcs, auto=True)
+            propose_strategies(t, constraints, mcs, auto=True,
+                               use_predefined_strats=use_predef,
+                               single_strat_cons=_ssc,
+                               filters=_filters)
         except Exception as e:
-            _warn(f'Exception occured when getting strategies for ticker {t}: {e}', level=2)
+            _warn(f'Exception occured when getting strategies for ticker {t}: {e}\n'
+                  f'{traceback.print_tb(e.__traceback__)}', level=2)
             continue
 
 
@@ -3930,7 +3993,7 @@ def binom_test():
     prices = []
     prices_b = []
     initial_dte = dte_then
-    for i in range(initial_dte-1):
+    for i in range(initial_dte - 1):
         dte_then -= 1
         prices.append(a())
         prices_b.append(b())
@@ -4004,7 +4067,6 @@ def test_greeks():
 
 
 if __name__ == "__main__":
-
     # TODO pretty representation of option chain, yk
 
     # todo pops differ for 0 dte
@@ -4041,26 +4103,28 @@ if __name__ == "__main__":
     t = "amc"
     ssc = {
         "risk": ("le", 150),
-        "rom": ("le", 1),    # just to prefilter and make things faster
-        "e_tp_close": ("ge", 10),
+        "rom": ("le", 1),  # just to prefilter and make things faster
+        "max_gain": ("ge", 10),
+        "rom50": ("ge", 0.3),
+        # "e_tp_close": ("ge", 10),
     }
     f = [
         [OptionChain.volume, 10],
-        #[OptionChain.expiration_close_to_dte, 45]
+        # [OptionChain.expiration_close_to_dte, 45]
     ]
-    #"""
+    """
     propose_strategies(t,
                        StrategyConstraints(strict_mode=False,
                                            min_oi30=1000,
                                            min_vol30=1000,
-                                           min_sinle_opt_vol=0),
+                                           min_sinle_opt_vol=10),  # used to prefilter chain
                        MonteCarloSimulator(tickers=[t]),
-                       auto=False,
+                       auto=True,
                        use_predefined_strats=False,
                        single_strat_cons=ssc,
                        filters=f)
     # """
 
-    # get_market_recommendations(get_trending_theta_strat_tickers)
+    get_market_recommendations(get_trending_theta_strat_tickers, use_predef=True, _ssc=ssc, _filters=f)
 
-    #binom_test()
+    # binom_test()
