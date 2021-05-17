@@ -3059,12 +3059,12 @@ class OptionStrategy:
         avg_imp_vol = sum(opt_ivs) / len(opt_ivs)
         dtfe = self.positions.dte_until_first_exp()
         # divide by root of time to get std dev over other timeframes != 1
-        std_dev = avg_imp_vol * ((dtfe + 0.1) / 365.0) ** 0.5
+        std_dev = self.env_container.u_mid * avg_imp_vol * ((dtfe + 0.1) / 365.0) ** 0.5
         # loc=mean, scale=std dev
         implied_pop = norm.cdf(self.positions.break_even, loc=self.env_container.u_mid, scale=std_dev)
 
         # imp pop at close
-        std_dev = avg_imp_vol * ((datetime_to_dte(self.close_date) + .1) / 365.0) ** 0.5
+        std_dev = self.env_container.u_mid * avg_imp_vol * ((datetime_to_dte(self.close_date) + .1) / 365.0) ** 0.5
         implied_pop_at_close = norm.cdf(self.positions.break_even, loc=self.env_container.u_mid, scale=std_dev)
 
         if self.positions.break_even > self.positions.max_profit_point or \

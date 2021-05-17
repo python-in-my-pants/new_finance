@@ -23,7 +23,7 @@ debug = False
 
 """
 options for IV:
-- use first exp month options IV
+- use first exp month options IV (not only of position but of option chain)
 - use positions option IV (higher / lower ?)
 - historic IV (all data)
 - 1 year IV
@@ -155,7 +155,8 @@ class MonteCarloSimulator(object):
         # this is where the random magic happens
         dr = np.exp(ft + stv * norm.ppf(np.random.rand(days, iterations)))
 
-        # data frame with "days" rows and "iterations" columns filled with percentual daily returns (like 1.05 for +5%)
+        # data frame with "days" rows and "iterations" columns filled with
+        # percentual daily returns (like 1.05 for +5%)
         return dr
     # </editor-fold>
 
