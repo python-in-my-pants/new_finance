@@ -19,7 +19,7 @@ import pathlib
 from Option import Option
 from Option_utility import *
 from pprint import pprint as pp, pformat as pf
-from Utility import timeit
+from Utility import timeit, ppdict
 from pandasgui import show
 from collections import OrderedDict
 from scipy.stats import norm
@@ -32,7 +32,7 @@ ipdb.set_trace()
 
 pritn = print
 
-online = False
+online = True
 force_chain_download = True and online
 force_meta_download = True and online
 
@@ -48,7 +48,7 @@ DEFAULT_THRESHOLD = .3
 # <editor-fold desc="Miscellaneous">
 
 def _warn(msg, level=3):
-    warnings.warn("\n\t" + msg, stacklevel=level)
+    warnings.warn("\t" + msg, stacklevel=level)
 
 
 if not online:
@@ -125,7 +125,7 @@ def get_risk_free_rate(annualized_dte):
     return libor_rates[abs_min_closest_index(libor_expiries, annualized_dte * 365)]
 
 
-libor_rates = get_libor_rates() if online else [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
+libor_rates = get_libor_rates() if online else [0.0629, 0.0708, 0.0993, 0.122, 0.1553, 0.1838, 0.2628]
 libor_expiries = (1, 7, 30, 61, 92, 182, 365)
 
 
@@ -653,7 +653,7 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
             put_spr_r, put_spr_abs = get_bid_ask_spread(next_puts, meta.u_ask)
             if put_spr_r >= 0.10:
                 _warn(
-                    f'[{ticker}] Warning! Spread ratio is very wide: '
+                    f'[{ticker}] Warning! Bid/Ask-Spread  is very wide: '
                     f'Puts = {put_spr_abs:.2f} $ ({put_spr_r * 100:.2f} %)')
                 if strat_cons.strict_mode:
                     r = False
@@ -778,7 +778,7 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
     else:
         proposed_strategies = CustomStratGenerator.get_strats(chain=meta.option_chain,
                                                               env=env_con,
-                                                              target_param_dict=single_strat_cons,
+                                                              target_param_tuple=single_strat_cons,
                                                               strat_type="vertical spread",
                                                               filters=filters)
 
@@ -1916,7 +1916,9 @@ class CombinedPosition:
                f'{indent}                        BPR: {self.bpr:>+6.2f} $' \
                f'\n' \
                f'\n' \
-               f'{indent}       Break even on expiry: {self.break_even:4.2f} $' \
+               f'{indent}       Break even on expiry: ' \
+               f'{">" if self.max_profit_point > self.break_even else "<"}' \
+               f'{self.break_even:4.2f} $' \
                f'\n' \
                f'{indent}     Implied 1 STD DEV move: ±{self.expected_move:4.2f} $ ' \
                f'({max(self.u_mid - self.expected_move, 0):.2f} $/{self.u_mid + self.expected_move:.2f} $)' \
@@ -1934,9 +1936,9 @@ class CombinedPosition:
                f'\n' \
                f'{indent}Return on margin (TP @ 50%): {self.rom50 * 100:.2f}%' \
                f'\n' \
-               f'{indent}           Max profit / DTE: {self.prof_time:.2f}' \
+               f'{indent}           Max profit / DTE: {self.prof_time:.2f} $/d' \
                f'\n' \
-               f'{indent}          Half profit / DTE: {self.prof_time50:.2f}' \
+               f'{indent}          Half profit / DTE: {self.prof_time50:.2f} $/d' \
                f'\n\n'
 
     def detail(self, t=0):
@@ -1999,7 +2001,7 @@ class CombinedPosition:
         self.rom = self.get_rom()
         self.rom50 = self.rom / 2
         self.prof_time = self.max_profit / max(1, self.dte_until_first_exp())
-        self.prof_time50 = self.prof_time / 2
+        self.prof_time50 = self.max_profit / (2*min(21, self.dte_until_first_exp()))
 
         # pop ptp psl
         # todo mcs gives only option value? what about naked shorts for example? stock in comb pos? ->
@@ -2276,8 +2278,6 @@ class CombinedPosition:
         legs = [pos for pos in list(self.pos_dict.values()) if type(pos.asset) is Option]
 
         leg_gains = 0
-        short_gain = 0
-        long_gain = 0
         for leg in legs:
             if dte > 0:
                 if mode == "bjerksund":
@@ -2710,6 +2710,7 @@ class OptionStrategy:
         self.implied_pop = -1
         self.implied_pop_at_close = -1
         self.close_pn = -1
+        self.close_be = -1
         self.e_tp_close = -1  # close_pn * tp_percentaga/100 * max_gain
         self.greek_exposure = None  # set after environment check
         self.close_date = None
@@ -2725,11 +2726,15 @@ class OptionStrategy:
     def get_test_results_str(self, t=0):
         to_ret = ""
         indent = "\t" * t
-        parts = self.test_results.split("\n")
-        for part in parts:
-            to_ret += f'{indent}{part}\n'
-        to_ret = to_ret.replace("Testing", "Tested")[:-1]
-        return to_ret
+        parts = self.test_results
+        if isinstance(parts, str):
+            parts = parts.split("\n")
+            for part in parts:
+                to_ret += f'{indent}{part}\n'
+            to_ret = to_ret.replace("Testing", "Tested")[:-1]
+            return to_ret
+        if isinstance(parts, dict):
+            return ppdict(parts, i=t)
 
     def short(self, t=0):
         indent = ("\t" * t)  # todo add greek exposure in pretty
@@ -2765,29 +2770,38 @@ class OptionStrategy:
                f'\n' \
                f'{indent}{"-" * 120}' \
                f'\n' \
-               f'{self.get_test_results_str()}' \
+               f'{self.get_test_results_str(t+1)}' \
                f'\n' \
                f'{indent}{" ." * 60}' \
                f'{indent}{self.positions.repr(t=t + 1)}' \
                f'{greek_exp if False else ""}' \
+               f'{indent}          --- CLOSE ---' \
+               f'\n' \
+               f'\n' \
                f'{indent}     Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} days)' \
                f'\n' \
-               f'{indent} PoP at close: {self.close_pop * 100: >3.2f} %' \
+               f'{indent} MC PoP@close: {self.close_pop * 100: >3.2f} %' \
                f'\n' \
-               f'{indent} ImpPoP@close: {self.implied_pop_at_close * 100: >3.2f} %' \
+               f'{indent} ImpPoP@close: {self.implied_pop_at_close * 100: >3.2f} % WRONG' \
                f'\n' \
                f'{indent} P{int(self.tp_percentage)} at close: {self.close_pn * 100: >3.2f} %' \
+               f'\n' \
+               f'\n' \
+               f'{indent}  BE at close: {self.close_be: >3.2f} $ WRONG' \
+               f'\n' \
+               f'{indent}  E(TP)@close: {self.e_tp_close: >3.2f} $' \
                f'\n' \
                f'{indent}    Avg to TP: {int(self.tp_avg_d + 0.5)} days\t\t\tMed to TP: {int(self.tp_med_d)} days' \
                f'\n' \
                f'\n' \
-               f'{indent}   PoP at exp: {self.prob_of_profit * 100: >3.2f} %' \
+               f'{indent}          --- EXPIRATION ---' \
+               f'\n' \
+               f'\n' \
+               f'{indent} MC PoP @ exp: {self.prob_of_profit * 100: >3.2f} %' \
                f'\n' \
                f'{indent}  Implied PoP: {self.implied_pop * 100: >3.2f} %' \
                f'\n' \
                f'{indent}   P{int(self.tp_percentage)} at exp: {self.ptp * 100: >3.2f} %' \
-               f'\n' \
-               f'{indent}  E(TP)@close: {self.e_tp_close: >3.2f} $' \
                f'\n' \
                f'{indent}\n    Stop loss: {inner_sl}' \
                f'\n' \
@@ -2950,7 +2964,7 @@ class OptionStrategy:
                 self.test_results_dict["score"] = score / len(self.conditions.keys())
                 return score / len(self.conditions.keys())
             else:
-                self.test_results = pf(env)
+                self.test_results = env
                 self.test_results_dict = dict()
                 return 1
         except KeyError as e:
@@ -3036,7 +3050,7 @@ class OptionStrategy:
         """
 
         prob_dict = self.positions.mcs.get_pop_pn_sl(self,
-                                                     get_risk_free_rate(self.positions.dte_until_first_exp()))
+                                                     get_risk_free_rate(self.positions.dte_until_first_exp()/365))
         """clean, sel = self.positions.mcs.get_pop_dist(self.env_container.ticker,
                                                      self.positions.dte_until_first_exp(),
                                                      self.positions.break_even,
@@ -3051,6 +3065,7 @@ class OptionStrategy:
         self.tp_avg_d = prob_dict.tp_avg
         self.close_pop = prob_dict.close_pop
         self.close_pn = prob_dict.close_pn
+        self.close_be = prob_dict.close_be  # todo wrong??
         self.e_tp_close = self.tp_percentage / 100 * self.positions.max_profit * self.close_pn
 
         # implied by option IVs
@@ -3065,7 +3080,7 @@ class OptionStrategy:
 
         # imp pop at close
         std_dev = self.env_container.u_mid * avg_imp_vol * ((datetime_to_dte(self.close_date) + .1) / 365.0) ** 0.5
-        implied_pop_at_close = norm.cdf(self.positions.break_even, loc=self.env_container.u_mid, scale=std_dev)
+        implied_pop_at_close = norm.cdf(self.close_be, loc=self.env_container.u_mid, scale=std_dev)
 
         if self.positions.break_even > self.positions.max_profit_point or \
                 (self.positions.break_even == self.positions.max_profit_point and self.positions.greeks["delta"] <= 0):
@@ -3680,7 +3695,7 @@ class CustomStratGenerator:
     @staticmethod
     def get_strats(chain: OptionChain,
                    env: EnvContainer,
-                   target_param_dict: dict,
+                   target_param_tuple: tuple,
                    strat_type: str,
                    filters: List[List[Union[Callable, float]]] = None) -> Optional[List[OptionStrategy]]:
         """
@@ -3703,7 +3718,7 @@ class CustomStratGenerator:
             Condors
             Custom
 
-        :param target_param_dict:
+        :param target_param_tuple:
             max_gain: ("g", 0),
             risk: ("le", 100),
             delta_exp: ("eq", True),               -> True= ">=" 0, else False
@@ -3727,8 +3742,9 @@ class CustomStratGenerator:
         complex_attributes = {"ptp", "prob_of_profit", "psl", "tp_med_d", "tp_avg_d", "close_pop", "close_pn",
                               "e_tp_close"}
 
-        if any([True for key in target_param_dict.keys()
-                if key not in simple_attributes and key not in complex_attributes]):
+        attribute_keys = [_t[0] for _t in target_param_tuple]
+
+        if any([True for key in attribute_keys if key not in simple_attributes and key not in complex_attributes]):
             raise RuntimeError("Unsupported key provided!")
 
         private_chain = deepcopy(chain)
@@ -3739,7 +3755,9 @@ class CustomStratGenerator:
 
         # <editor-fold desc="Vertical Spread">
 
-        strat_name_counter = 0
+        _debug(f"[{env.ticker}] Start checking all vertical spreads for ticker {env.ticker} ...")
+
+        strat_name_counter = 1
 
         # set tp perc & sl perc
         tp_perc = 50
@@ -3791,9 +3809,7 @@ class CustomStratGenerator:
                             trade_cost = long_ask - short_bid
                             strike_diff = abs(long_strike - short_strike)
 
-                            risk = trade_cost * 100 if trade_cost > 0 else (
-                                                                                       strike_diff + trade_cost) * 100  # todo wrong?
-                            bpr = risk
+                            risk = (strike_diff + trade_cost) * 100  # todo wrong?
 
                             # for calls: (for puts inverted <>)
                             # if long strike < short strike => debit => max gain = strike_diff - debit paid
@@ -3802,15 +3818,23 @@ class CustomStratGenerator:
                             if opt_type == "c":
                                 # compute max gain
                                 if long_strike > short_strike:
-                                    max_gain = -trade_cost * 100
+                                    risk = (strike_diff - trade_cost)
+                                    max_gain = -trade_cost
                                 else:  # short strike > long strike
-                                    max_gain = (strike_diff - trade_cost) * 100
+                                    risk = (trade_cost + strike_diff)
+                                    max_gain = (strike_diff - trade_cost)
                             else:
                                 # compute max gain
                                 if long_strike < short_strike:
-                                    max_gain = -trade_cost * 100
-                                else:  # short strike > long strike
-                                    max_gain = (strike_diff - trade_cost) * 100
+                                    risk = (trade_cost + strike_diff)
+                                    max_gain = -trade_cost
+                                else:  # short strike < long strike
+                                    risk = (trade_cost - strike_diff)
+                                    max_gain = (strike_diff - trade_cost)
+
+                            max_gain *= 100
+                            risk *= 100
+                            bpr = risk
 
                             tp = tp_perc / 100 * max_gain
                             sl = -1 if sl_perc == 100 else sl_perc / 100 * risk
@@ -3832,14 +3856,16 @@ class CustomStratGenerator:
                             # </editor-fold>
 
                             unfitting = False
-                            simple_to_test = [tup for tup in target_param_dict.items() if tup[0] in simple_attributes]
-                            for param, val in simple_to_test:
+                            simple_to_test = [tup for tup in target_param_tuple if tup[0] in simple_attributes]
+                            for var, comp, val in simple_to_test:
                                 # calls the function given by val[0] on local correspondant of param from dict
-                                if not eval(f'{param}.{"__" + val[0] + "__"}({val[1]})'):
+                                if var == "rom50" and rom == float('inf'):
+                                    print("t")
+                                if not eval(f'{var}.{"__" + comp + "__"}({val})'):
                                     unfitting = True
                                     break
                                 else:
-                                    _debug(f'{param}: {param}.{"__" + val[0] + "__"}({val[1]}) = True', 3)
+                                    _debug(f'{var}: {var}.{"__" + comp + "__"}({val}) = True', 3)
 
                             if unfitting:
                                 break
@@ -3882,17 +3908,17 @@ class CustomStratGenerator:
 
                             # check other specific conditions here
 
-                            hard_to_test = [tup for tup in target_param_dict.items() if tup[0] in complex_attributes]
-                            for param, val in hard_to_test:
+                            hard_to_test = [tup for tup in target_param_tuple if tup[0] in complex_attributes]
+                            for var, comp, val in hard_to_test:
                                 # calls the function given by val[0] on local correspondant of param from dict
-                                if not eval(f'opt_strat.{param}.{"__" + val[0] + "__"}({val[1]})'):
+                                if not eval(f'opt_strat.{var}.{"__" + comp + "__"}({val})'):
                                     # print(opt_strat)
                                     """x = f'opt_strat.{param}'
                                     print(f'{param}: opt_strat.{param} = {eval(x)} not {val[0]}({val[1]})')"""
                                     unfitting = True
                                     break
                                 else:
-                                    _debug(f'{param}: opt_strat.{param}.{"__" + val[0] + "__"}({val[1]}) = True', 3)
+                                    _debug(f'{var}: opt_strat.{var}.{"__" + comp + "__"}({val}) = True', 3)
 
                             if unfitting:
                                 break
@@ -3926,14 +3952,15 @@ def get_high_option_vol_tickers(exclude_sub_industries=('Pharmaceuticals',
 
 
 def get_trending_theta_strat_tickers():
-    return ["LAZR", "SNDL", "CCIV", "T", "RBLX", "AMC", "SPX", "WKHS", "AMZN", "RKT", "MSFT", "NIO", "GME", "PINS",
+    return ["LAZR", "SNDL", "CCIV", "T", "RBLX", "AMC", "WKHS", "AMZN", "RKT", "MSFT", "NIO", "GME", "PINS",
             "AAPL", "SPY", "TSLA", "AMD", "PLTR", "MVIS"]
 
 
 # </editor-fold>
 
 
-def get_market_recommendations(ticker_f, start_from=None, use_predef=False, _ssc=dict(), _filters=list()):
+@timeit
+def get_market_recommendations(ticker_f, start_from=None, use_predef=False, _ssc=tuple(), _filters=list()):
     print(f"[{get_timestamp()}] Start getting market recommendations")
     constraints = StrategyConstraints(strict_mode=False, min_oi30=100, min_vol30=1000, min_sinle_opt_vol=0)
     tickers = ticker_f()
@@ -4071,7 +4098,7 @@ if __name__ == "__main__":
 
     # todo pops differ for 0 dte
     # todo supply position and get all the stuff from option strat, "watcha think bout dis"
-
+    # todo expect, sample every 10ct and get prob
     # todo break even on exit day
 
     # todo print warnings to strat sum
@@ -4101,13 +4128,14 @@ if __name__ == "__main__":
     # todo prob forecasts use historic variance, plot uses implied vol ... maybe use this too for forecasts?
 
     t = "amc"
-    ssc = {
-        "risk": ("le", 150),
-        "rom": ("le", 1),  # just to prefilter and make things faster
-        "max_gain": ("ge", 10),
-        "rom50": ("ge", 0.3),
+    ssc = (
+        ("risk", "le", 150),
+        ("rom", "le", 1),  # just to prefilter and make things faster
+        ("max_gain", "ge", 10),
+        ("rom50", "ge", 0.3),
+        ("rom50", "le", 10),
         # "e_tp_close": ("ge", 10),
-    }
+    )
     f = [
         [OptionChain.volume, 10],
         # [OptionChain.expiration_close_to_dte, 45]
@@ -4125,6 +4153,6 @@ if __name__ == "__main__":
                        filters=f)
     # """
 
-    get_market_recommendations(get_trending_theta_strat_tickers, use_predef=True, _ssc=ssc, _filters=f)
+    get_market_recommendations(get_trending_theta_strat_tickers, use_predef=False, _ssc=ssc, _filters=f)
 
     # binom_test()

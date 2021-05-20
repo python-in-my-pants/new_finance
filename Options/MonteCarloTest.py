@@ -1,7 +1,6 @@
 from pandas_datareader import data as dr
 import pandas as pd
 from datetime import date, timedelta
-from typing import List
 import numpy as np
 from scipy.stats import norm, lognorm
 from matplotlib import pyplot as plt
@@ -12,10 +11,11 @@ pd.set_option('display.max_colwidth', 500)
 pd.set_option('display.float_format', lambda x: '%.5f' % x)
 pd.options.mode.chained_assignment = None  # default='warn'
 
-def outer_get(tickers, threshold=12, with_plot=False):
+
+def outer_get(tickers, threshold=12.0, with_plot=False):
 
     def download_stock_data() -> pd.DataFrame:
-        years = 10
+        years = 1
         data = pd.DataFrame()
         one_year_earlier = (date.today() - timedelta(days=365 * years)).strftime('%Y-%m-%d')
         if len(tickers) == 1:
@@ -26,7 +26,7 @@ def outer_get(tickers, threshold=12, with_plot=False):
 
     stock_price_hist = download_stock_data().dropna()
     current_stock_price = stock_price_hist.iloc[-1, 0]
-    days_to_sim = 90
+    days_to_sim = 45
 
     def get_mc_sim(mode = "simple", get_dist=False):
 
@@ -66,7 +66,8 @@ def outer_get(tickers, threshold=12, with_plot=False):
             norm_distr = norm(loc=log_ret_mean, scale=log_ret_var ** 0.5)
         if mode == "abs":
             norm_distr = norm(loc=abs_ret_mean, scale=abs_ret_var ** 0.5)
-        #print(f'MCS using STD of {simple_ret_var**0.5:.5f} and mean of {simple_ret_mean:.5f}')
+
+        print(f'MCS using STD of {simple_ret_var**0.5:.5f} and mean of {simple_ret_mean:.5f}')
 
         if with_plot:
             x1 = np.linspace(norm_distr.ppf(0.01), norm_distr.ppf(0.99), 100)
@@ -89,13 +90,13 @@ def outer_get(tickers, threshold=12, with_plot=False):
 
             return gen_prices
 
-        iterations = 1000
+        iterations = 10000
 
         sim_prices = pd.DataFrame([use_normal_dist_of_returns() for _ in range(iterations)])
         end_prices = sim_prices.iloc[:, -1]
         p_mc = len(end_prices.loc[end_prices >= threshold])/len(end_prices)
 
-        #print(f'MCS end price STD {end_prices.var()**0.5:.5f} and mean of {end_prices.mean():.5f}')
+        print(f'MCS end price STD {end_prices.var()**0.5:.5f} and mean of {end_prices.mean():.5f}')
 
         if with_plot:
             sim_prices.transpose().plot(legend=False)
@@ -145,18 +146,20 @@ def outer_get(tickers, threshold=12, with_plot=False):
     print(f'P_mc: {100 * sum([get_mc_sim(mode="simple") for _ in range(10)])/10:.2f} %,'
           f'\tP_iv: {get_iv_calc()*100:.2f} %\n')
 
-    plt.plot(*get_mc_sim(get_dist=True), label="Monte carlo CDF 90", color="r")
-    plt.plot(*get_iv_calc(get_dist=True), label="IV CDF 90", color="b")
+    plt.plot(*get_mc_sim(get_dist=True), label="Monte carlo CDF " + str(days_to_sim), color="r")
+    plt.plot(*get_iv_calc(get_dist=True), label="IV CDF " + str(days_to_sim), color="b")
 
-    days_to_sim = 30
+    #days_to_sim = 90
 
-    plt.plot(*get_mc_sim(get_dist=True), label="Monte carlo CDF 30")
-    plt.plot(*get_iv_calc(get_dist=True), label="IV CDF 30")
+    #plt.plot(*get_mc_sim(get_dist=True), label="Monte carlo CDF 30")
+    #plt.plot(*get_iv_calc(get_dist=True), label="IV CDF 30")
 
     plt.plot([current_stock_price, current_stock_price], [1, 0])
+    plt.plot([0, 50], [.5, .5])
     plt.xlim([0, 50])
     plt.legend()
-    plt.show()
+    #plt.show()
+
 
 def lognorm_test():
     p = np.random.randint(0, 10, 1000)
@@ -175,6 +178,55 @@ def lognorm_test():
     plt.legend()
     plt.show()
 
-outer_get(["AMC"], 8)
 
-#lognorm_test()
+def lognorm_test2():
+
+    price = 10
+    rand_vars = norm(loc=1, scale=0.1).rvs(size=100)
+    rand_prices = [price]
+
+    for i in range(len(rand_vars)):
+        rand_prices.append(rand_prices[i]*rand_vars[i])
+
+    # now rand prices should be lognormal distributed, mu of norm = 10, sigma of norm = 2
+
+    rand_prices = np.asarray(rand_prices)
+    print(rand_vars)
+    print(rand_prices)
+
+    fig, ax = plt.subplots()
+    ax.hist(rand_prices)
+
+    log_rand_prices = np.log(rand_prices)
+
+    rand_prices_std = rand_prices.std()
+    rand_prices_mean = rand_prices.mean()
+
+    log_rand_prices_std = log_rand_prices.std()
+    log_rand_prices_mean = log_rand_prices.mean()
+
+    x = np.linspace(0, 100, 1000)
+
+    # use norm mu & sigma
+    lognorm_norm_cdf = lognorm.cdf(x, 0.1, 1)
+
+    # use rand prices std & mean
+    lognorm_rand_cdf = lognorm.cdf(x, rand_prices_std, rand_prices_mean)
+
+    # ...
+    lognorm_log_cdf = lognorm.cdf(x, log_rand_prices_std, log_rand_prices_mean)
+
+    # use norm but with ln stuff?
+    norm_trans_cdf = norm.cdf((np.exp(x)-1)/0.1)
+
+    #ax.plot(x, lognorm_norm_cdf, label="Norm CDF")
+    #ax.plot(x, lognorm_rand_cdf, label="Rand CDF")
+    #ax.plot(x, lognorm_log_cdf, label="Log CDF")
+    ax.plot(x, norm_trans_cdf, label="Norm trans CDF")
+    plt.legend()
+    plt.show()
+
+
+outer_get(["AMC"], 9.12)
+
+#lognorm_test2()

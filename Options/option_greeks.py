@@ -954,8 +954,15 @@ def _bjerksund_stensland_2002(fs, x, t, r, b, v):
     except OverflowError:
         i2 = float('inf')
 
-    alpha1 = (i1 - x) * (i1 ** (-beta))
-    alpha2 = (i2 - x) * (i2 ** (-beta))
+    try:
+        alpha1 = (i1 - x) * (i1 ** (-beta))
+    except FloatingPointError:
+        alpha1 = 0
+
+    try:
+        alpha2 = (i2 - x) * (i2 ** (-beta))
+    except FloatingPointError:
+        alpha2 = 0
 
     # debugging for calculations
     _debug("     t1 = {0}".format(t1))

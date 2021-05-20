@@ -3,6 +3,15 @@ from numpy import median
 import sys
 
 
+def ppdict(d, i=0):
+    indent = "\t"*i
+    s = ""
+    longest_key_len = max([len(key) for key in d.keys()])
+    for key, val in d.items():
+        s += f'{indent}{(longest_key_len-len(key))*" "}{key}:\t{val}\n'
+    return s
+
+
 def interactive():
 
     print("Interactive mode on! Type 'exit' to return to normal mode.")
