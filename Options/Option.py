@@ -1,6 +1,8 @@
 import pandas as pd
 from Option_utility import *
 from DDict import DDict
+from option_greeks import get_greeks
+from Option_strategy_selector import get_risk_free_rate
 
 
 class Option:
@@ -37,6 +39,23 @@ class Option:
 
         self.iv = iv
         self.oi = oi
+
+    @staticmethod
+    def new_parse_option(date_str: str, opt_type: str, strike: float, bid: float, ask: float):
+
+        dte = date_to_dte(str_to_date(date_str))
+        opt_price, iv, delta, gamma, theta, vega, rho = get_greeks(opt_type,
+                                                                   ask,
+                                                                   strike,
+                                                                   max(dte, 0.001),
+                                                                   get_risk_free_rate(dte / 365.0),
+                                                                   None,
+                                                                   0,
+                                                                   ask)
+
+        # name, opt_type, expiration, strike, bid, ask, vol, delta, gamma, theta, vega, rho, iv, oi
+        return Option(f'{date_str} {opt_type.upper()} {strike}', opt_type, date_str, strike, bid, ask,
+                      -1, delta, gamma, theta, vega, rho, iv, -1)
 
     def parse_option(self, opt_string):
 

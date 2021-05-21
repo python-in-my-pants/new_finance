@@ -147,8 +147,13 @@ def datetime_to_european_str(d: datetime):
     return d.strftime("%d.%m.%Y")
 
 
-def date_to_opt_format(d):
-    return str_to_date(d).strftime("%b %d")
+def date_to_opt_format(d: str):
+    return str_to_date(d).strftime("%b %d %y")
+
+
+def opt_date_str_to_date(opt_date_str: str):
+    # Jul 02 21
+    return datetime.strptime(opt_date_str, "%b %d %y")
 
 
 def datetime_to_str(d):

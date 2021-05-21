@@ -32,7 +32,7 @@ ipdb.set_trace()
 
 pritn = print
 
-online = True
+online = False
 force_chain_download = True and online
 force_meta_download = True and online
 
@@ -846,6 +846,19 @@ class Position:
 
     def __str__(self):
         return self.repr()
+
+    def from_string(self, s):
+        parts = s.split()
+        if len(parts) == 4:  # it's a stock
+            quantity, ticker, _, bid_ask = parts
+            bid, ask = bid_ask.split("/")
+            return Position(Stock(ticker, float(bid), float(ask)), float(quantity), float(ask))
+        if len(parts) == 7:  # option
+            quantity, month, day, year, opt_type, strike, _, bid_ask = parts
+            bid, ask = bid_ask.split("/")
+            d_str = f'{month} {day} {year}'
+            return Position(Option.new_parse_option(d_str, opt_type, float(strike), float(bid), float(ask)),
+                            float(quantity), float(ask))
 
     def to_dict(self):
 
@@ -4153,6 +4166,6 @@ if __name__ == "__main__":
                        filters=f)
     # """
 
-    get_market_recommendations(get_trending_theta_strat_tickers, use_predef=False, _ssc=ssc, _filters=f)
+    get_market_recommendations(get_trending_theta_strat_tickers, use_predef=True, _ssc=ssc, _filters=f)
 
     # binom_test()
