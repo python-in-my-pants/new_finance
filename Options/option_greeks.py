@@ -23,6 +23,7 @@ from scipy.stats import mvn
 # Developer can toggle _DEBUG to True for more messages
 # normally this is set to False
 _DEBUG = False
+np.seterr(all="ignore")
 
 
 # MIT License
@@ -729,8 +730,8 @@ def _gbs(option_type, fs, x, t, r, b, v):
 
     # -----------
     # Create preliminary calculations
-    t__sqrt = math.sqrt(t)
-    d1 = (math.log(fs / x) + (b + (v * v) / 2) * t) / (v * t__sqrt)
+    t__sqrt = np.sqrt(t)
+    d1 = (np.log(fs / x) + (b + (v * v) / 2) * t) / (v * t__sqrt)
     d2 = d1 - v * t__sqrt
 
     if option_type == "c":
@@ -752,13 +753,13 @@ def _gbs(option_type, fs, x, t, r, b, v):
         except FloatingPointError:
             norm_pdf_d1 = 0
 
-        value = fs * math.exp((b - r) * t) * norm_cdf_d1 - x * math.exp(-r * t) * norm_cdf_d2
-        delta = math.exp((b - r) * t) * norm_cdf_d1
-        gamma = math.exp((b - r) * t) * norm_pdf_d1 / (fs * v * t__sqrt)
-        theta = -(fs * v * math.exp((b - r) * t) * norm_pdf_d1) / (2 * t__sqrt) - (b - r) * fs * math.exp(
-            (b - r) * t) * norm_cdf_d1 - r * x * math.exp(-r * t) * norm_cdf_d2
-        vega = math.exp((b - r) * t) * fs * t__sqrt * norm_pdf_d1
-        rho = x * t * math.exp(-r * t) * norm_cdf_d2
+        value = fs * np.exp((b - r) * t) * norm_cdf_d1 - x * np.exp(-r * t) * norm_cdf_d2
+        delta = np.exp((b - r) * t) * norm_cdf_d1
+        gamma = np.exp((b - r) * t) * norm_pdf_d1 / (fs * v * t__sqrt)
+        theta = -(fs * v * np.exp((b - r) * t) * norm_pdf_d1) / (2 * t__sqrt) - (b - r) * fs * np.exp(
+            (b - r) * t) * norm_cdf_d1 - r * x * np.exp(-r * t) * norm_cdf_d2
+        vega = np.exp((b - r) * t) * fs * t__sqrt * norm_pdf_d1
+        rho = x * t * np.exp(-r * t) * norm_cdf_d2
     else:
         # it's a put
         _debug("     Put Option")
@@ -778,13 +779,13 @@ def _gbs(option_type, fs, x, t, r, b, v):
         except FloatingPointError:
             norm_pdf_d1 = 0
 
-        value = x * math.exp(-r * t) * norm_cdf_md2 - (fs * math.exp((b - r) * t) * norm_cdf_md1)
-        delta = -math.exp((b - r) * t) * norm_cdf_md1
-        gamma = math.exp((b - r) * t) * norm_pdf_d1 / (fs * v * t__sqrt)
-        theta = -(fs * v * math.exp((b - r) * t) * norm_pdf_d1) / (2 * t__sqrt) + (b - r) * fs * math.exp(
-            (b - r) * t) * norm_cdf_md1 + r * x * math.exp(-r * t) * norm_cdf_md2
-        vega = math.exp((b - r) * t) * fs * t__sqrt * norm_pdf_d1
-        rho = -x * t * math.exp(-r * t) * norm_cdf_md2
+        value = x * np.exp(-r * t) * norm_cdf_md2 - (fs * np.exp((b - r) * t) * norm_cdf_md1)
+        delta = -np.exp((b - r) * t) * norm_cdf_md1
+        gamma = np.exp((b - r) * t) * norm_pdf_d1 / (fs * v * t__sqrt)
+        theta = -(fs * v * np.exp((b - r) * t) * norm_pdf_d1) / (2 * t__sqrt) + (b - r) * fs * np.exp(
+            (b - r) * t) * norm_cdf_md1 + r * x * np.exp(-r * t) * norm_cdf_md2
+        vega = np.exp((b - r) * t) * fs * t__sqrt * norm_pdf_d1
+        rho = -x * t * np.exp(-r * t) * norm_cdf_md2
 
     _debug("     d1= {0}\n     d2 = {1}".format(d1, d2))
     _debug("     delta = {0}\n     gamma = {1}\n     theta = {2}\n     vega = {3}\n     rho={4}".format(delta, gamma,
@@ -861,14 +862,14 @@ def _bjerksund_stensland_1993(fs, x, t, r, b, v):
 
     # Intermediate Calculations
     v2 = v ** 2
-    sqrt_t = math.sqrt(t)
+    sqrt_t = np.sqrt(t)
 
-    beta = (0.5 - b / v2) + math.sqrt(((b / v2 - 0.5) ** 2) + 2 * r / v2)
+    beta = (0.5 - b / v2) + np.sqrt(((b / v2 - 0.5) ** 2) + 2 * r / v2)
     b_infinity = (beta / (beta - 1)) * x
     b_zero = max(x, (r / (r - b)) * x)
 
     h1 = -(b * t + 2 * v * sqrt_t) * (b_zero / (b_infinity - b_zero))
-    i = b_zero + (b_infinity - b_zero) * (1 - math.exp(h1))
+    i = b_zero + (b_infinity - b_zero) * (1 - np.exp(h1))
     alpha = (i - x) * (i ** (-beta))
 
     # debugging for calculations
@@ -931,26 +932,26 @@ def _bjerksund_stensland_2002(fs, x, t, r, b, v):
     # -----------
     # Create preliminary calculations
     v2 = v ** 2
-    t1 = 0.5 * (math.sqrt(5) - 1) * t
+    t1 = 0.5 * (np.sqrt(5) - 1) * t
     t2 = t
 
     beta_inside = ((b / v2 - 0.5) ** 2) + 2 * r / v2
     # forcing the inside of the sqrt to be a positive number
     beta_inside = abs(beta_inside)
-    beta = (0.5 - b / v2) + math.sqrt(beta_inside)
+    beta = (0.5 - b / v2) + np.sqrt(beta_inside)
     b_infinity = (beta / (beta - 1)) * x
     b_zero = max(x, (r / (r - b)) * x)
 
-    h1 = -(b * t1 + 2 * v * math.sqrt(t1)) * ((x ** 2) / ((b_infinity - b_zero) * b_zero))
-    h2 = -(b * t2 + 2 * v * math.sqrt(t2)) * ((x ** 2) / ((b_infinity - b_zero) * b_zero))
+    h1 = -(b * t1 + 2 * v * np.sqrt(t1)) * ((x ** 2) / ((b_infinity - b_zero) * b_zero))
+    h2 = -(b * t2 + 2 * v * np.sqrt(t2)) * ((x ** 2) / ((b_infinity - b_zero) * b_zero))
 
     try:
-        i1 = b_zero + (b_infinity - b_zero) * (1 - math.exp(h1))
+        i1 = b_zero + (b_infinity - b_zero) * (1 - np.exp(h1))
     except OverflowError:
         i1 = float('inf')
 
     try:
-        i2 = b_zero + (b_infinity - b_zero) * (1 - math.exp(h2))
+        i2 = b_zero + (b_infinity - b_zero) * (1 - np.exp(h2))
     except OverflowError:
         i2 = float('inf')
 
@@ -1015,29 +1016,29 @@ def _bjerksund_stensland_2002(fs, x, t, r, b, v):
 # -----------
 # The Psi() function used by _Bjerksund_Stensland_2002 model
 def _psi(fs, t2, gamma, h, i2, i1, t1, r, b, v):
-    vsqrt_t1 = v * math.sqrt(t1)
-    vsqrt_t2 = v * math.sqrt(t2)
+    vsqrt_t1 = v * np.sqrt(t1)
+    vsqrt_t2 = v * np.sqrt(t2)
 
     bgamma_t1 = (b + (gamma - 0.5) * (v ** 2)) * t1
     bgamma_t2 = (b + (gamma - 0.5) * (v ** 2)) * t2
 
-    d1 = (math.log(fs / i1) + bgamma_t1) / vsqrt_t1
-    d3 = (math.log(fs / i1) - bgamma_t1) / vsqrt_t1
+    d1 = (np.log(fs / i1) + bgamma_t1) / vsqrt_t1
+    d3 = (np.log(fs / i1) - bgamma_t1) / vsqrt_t1
 
-    d2 = (math.log((i2 ** 2) / (fs * i1)) + bgamma_t1) / vsqrt_t1
-    d4 = (math.log((i2 ** 2) / (fs * i1)) - bgamma_t1) / vsqrt_t1
+    d2 = (np.log((i2 ** 2) / (fs * i1)) + bgamma_t1) / vsqrt_t1
+    d4 = (np.log((i2 ** 2) / (fs * i1)) - bgamma_t1) / vsqrt_t1
 
-    e1 = (math.log(fs / h) + bgamma_t2) / vsqrt_t2
-    e2 = (math.log((i2 ** 2) / (fs * h)) + bgamma_t2) / vsqrt_t2
-    e3 = (math.log((i1 ** 2) / (fs * h)) + bgamma_t2) / vsqrt_t2
-    e4 = (math.log((fs * (i1 ** 2)) / (h * (i2 ** 2))) + bgamma_t2) / vsqrt_t2
+    e1 = (np.log(fs / h) + bgamma_t2) / vsqrt_t2
+    e2 = (np.log((i2 ** 2) / (fs * h)) + bgamma_t2) / vsqrt_t2
+    e3 = (np.log((i1 ** 2) / (fs * h)) + bgamma_t2) / vsqrt_t2
+    e4 = (np.log((fs * (i1 ** 2)) / (h * (i2 ** 2))) + bgamma_t2) / vsqrt_t2
 
-    tau = math.sqrt(t1 / t2)
+    tau = np.sqrt(t1 / t2)
     lambda1 = (-r + gamma * b + 0.5 * gamma * (gamma - 1) * (v ** 2))
     kappa = (2 * b) / (v ** 2) + (2 * gamma - 1)
 
     # underflow encountered in double_scalars
-    psi = math.exp(lambda1 * t2) * (fs ** gamma) * (_cbnd(-d1, -e1, tau)
+    psi = np.exp(lambda1 * t2) * (fs ** gamma) * (_cbnd(-d1, -e1, tau)
                                                     - ((i2 / fs) ** kappa) * _cbnd(-d2, -e2, tau)
                                                     - ((i1 / fs) ** kappa) * _cbnd(-d3, -e3, -tau)
                                                     + ((i1 / i2) ** kappa) * _cbnd(-d4, -e4, -tau))
@@ -1050,13 +1051,17 @@ def _psi(fs, t2, gamma, h, i2, i1, t1, r, b, v):
 # -----------
 # The Phi() function used by _Bjerksund_Stensland_2002 model and the _Bjerksund_Stensland_1993 model
 def _phi(fs, t, gamma, h, i, r, b, v):
-    d1 = -(math.log(fs / h) + (b + (gamma - 0.5) * (v ** 2)) * t) / (v * math.sqrt(t))
-    d2 = d1 - 2 * math.log(i / fs) / (v * math.sqrt(t))
+    try:
+        d1 = -(np.log(fs / h) + (b + (gamma - 0.5) * (v ** 2)) * t) / (v * np.sqrt(t))
+    except ValueError:
+        print(f'fs: {fs}, t: {t}, gamma: {gamma}, h: {h}, i: {i}, r: {r}, b: {b}, v: {v}')
+        raise RuntimeError
+    d2 = d1 - 2 * np.log(i / fs) / (v * np.sqrt(t))
 
     lambda1 = (-r + gamma * b + 0.5 * gamma * (gamma - 1) * (v ** 2))
     kappa = (2 * b) / (v ** 2) + (2 * gamma - 1)
 
-    phi = math.exp(lambda1 * t) * (fs ** gamma) * (norm._cdf(d1) - ((i / fs) ** kappa) * norm._cdf(d2))
+    phi = np.exp(lambda1 * t) * (fs ** gamma) * (norm._cdf(d1) - ((i / fs) ** kappa) * norm._cdf(d2))
 
     _debug("-----")
     _debug("Debug info for: _phi()")
@@ -1116,10 +1121,10 @@ def _cbnd(a, b, rho):
 def _approx_implied_vol(option_type, fs, x, t, r, b, cp):
     _test_option_type(option_type)
 
-    ebrt = math.exp((b - r) * t)
-    ert = math.exp(-r * t)
+    ebrt = np.exp((b - r) * t)
+    ert = np.exp(-r * t)
 
-    a = math.sqrt(2 * math.pi) / (fs * ebrt + x * ert)
+    a = np.sqrt(2 * math.pi) / (fs * ebrt + x * ert)
 
     if option_type == "c":
         payoff = fs * ebrt - x * ert
@@ -1129,7 +1134,7 @@ def _approx_implied_vol(option_type, fs, x, t, r, b, cp):
     b = cp - payoff / 2
     c = (payoff ** 2) / math.pi
 
-    v = (a * (b + math.sqrt(b ** 2 + c))) / math.sqrt(t)
+    v = (a * (b + np.sqrt(b ** 2 + c))) / np.sqrt(t)
 
     return v
 
@@ -1361,9 +1366,9 @@ def asian_76(option_type, fs, x, t, t_a, r, v):
         v_a = v
     else:
         # Approximate the volatility
-        m = (2 * math.exp((v ** 2) * t) - 2 * math.exp((v ** 2) * t_a) * (1 + (v ** 2) * (t - t_a))) / (
+        m = (2 * np.exp((v ** 2) * t) - 2 * np.exp((v ** 2) * t_a) * (1 + (v ** 2) * (t - t_a))) / (
             (v ** 4) * ((t - t_a) ** 2))
-        v_a = math.sqrt(math.log(m) / t)
+        v_a = np.sqrt(np.log(m) / t)
 
     # Finally, have the GBS function do the calculation
     return _gbs(option_type, fs, x, t, r, b, v_a)
@@ -1379,7 +1384,7 @@ def kirks_76(option_type, f1, f2, x, t, r, v1, v2, corr):
     b = 0
     fs = f1 / (f2 + x)
     f_temp = f2 / (f2 + x)
-    v = math.sqrt((v1 ** 2) + ((v2 * f_temp) ** 2) - (2 * corr * v1 * v2 * f_temp))
+    v = np.sqrt((v1 ** 2) + ((v2 * f_temp) ** 2) - (2 * corr * v1 * v2 * f_temp))
     my_values = _gbs(option_type, fs, 1.0, t, r, b, v)
 
     # Have the GBS function return a value

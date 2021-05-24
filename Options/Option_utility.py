@@ -153,7 +153,11 @@ def date_to_opt_format(d: str):
 
 def opt_date_str_to_date(opt_date_str: str):
     # Jul 02 21
-    return datetime.strptime(opt_date_str, "%b %d %y")
+    return datetime.strptime(opt_date_str, "%b %d %y").date()
+
+
+def date_to_opt_name_format(d):
+    return d.strftime("%y%m%d")
 
 
 def datetime_to_str(d):

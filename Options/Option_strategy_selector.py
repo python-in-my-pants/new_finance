@@ -24,6 +24,8 @@ from pandasgui import show
 from collections import OrderedDict
 from scipy.stats import norm
 import traceback
+from Libor import *
+
 
 """
 import ipdb
@@ -90,43 +92,6 @@ plt.rc('figure', facecolor="#333333", edgecolor="#333333")
 plt.rc('axes', facecolor="#353535", edgecolor="#000000")
 plt.rc('lines', color="#393939")
 plt.rc('grid', color="#121212")
-
-
-# </editor-fold>
-
-# <editor-fold desc="Libor">
-
-# todo replace with aribor
-
-def get_libor_rates():
-    libor_url = "https://www.finanzen.net/zinsen/libor/usd"
-
-    source = urllib.request.urlopen(libor_url).read()
-    soup = BeautifulSoup(source, 'lxml')
-
-    table = soup.find('tbody', attrs={'id': 'InterestRateYieldList'})
-    table_rows = table.find_all('tr')
-
-    rates = []
-    for tr in table_rows:
-        td = tr.find_all('td')
-        row = [tr.text.strip() for tr in td]
-        rates.append(float(row[1].replace(",", ".")))
-
-    return rates
-
-
-def get_risk_free_rate(annualized_dte):
-    """
-
-    :param annualized_dte:
-    :return:
-    """
-    return libor_rates[abs_min_closest_index(libor_expiries, annualized_dte * 365)]
-
-
-libor_rates = get_libor_rates() if online else [0.0629, 0.0708, 0.0993, 0.122, 0.1553, 0.1838, 0.2628]
-libor_expiries = (1, 7, 30, 61, 92, 182, 365)
 
 
 # </editor-fold>
@@ -555,7 +520,7 @@ class StrategyConstraints:
 @timeit
 def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
                        monte_carlo: MonteCarloSimulator, auto: bool = False, use_predefined_strats: bool = True,
-                       single_strat_cons: Dict[str, Tuple[str, Any]] = None,
+                       single_strat_cons: tuple = None,
                        filters: List[List[Union[Callable, float]]] = None):
     # todo get short term price outlook (technical analysis, resistances from barchart.com etc)
 
@@ -685,8 +650,6 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
             if strat_cons.assignment_must_be_possible:
                 return
 
-    # -----------------------------------------------------------------------------------------------------------------
-
     # <editor-fold desc="1 Binary events">
     binary_event_date = binary_events_present()
 
@@ -801,6 +764,263 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
             pass
 
 
+def check_spread(strat_cons: StrategyConstraints):
+
+    ticker = "AMC"#input("Ticker: ")
+
+    ticker = ticker.upper()
+
+    print(f'\nChecking ticker {ticker} ...\n')
+
+    print(f'Settings:\n\n'
+          f'           Defined risk only: {strat_cons.defined_risk_only}\n'
+          f'                Avoid events: {strat_cons.avoid_events}\n'
+          f'                  Min vol 30: {strat_cons.min_vol30}\n'
+          f'    Min single option volume: {strat_cons.min_sinle_opt_vol}\n'
+          f'        Min open interest 30: {strat_cons.min_oi30}\n'
+          f'                 Strict mode: {strat_cons.strict_mode}\n'
+          f' Assignment must be possible: {strat_cons.assignment_must_be_possible}\n')
+
+    meta = get_meta_data(ticker, strat_cons.min_sinle_opt_vol)
+
+    if meta is None:
+        # _warn(f'Receiving empty data for ticker {ticker}!')
+        return []
+
+    print(f'\nStock info:\n\n'
+          f'                   Stock bid: {meta.u_bid:.2f} $\n'
+          f'                   Stock ask: {meta.u_ask:.2f} $\n'
+          f'                      Sector: {meta.sector if meta.sector else "N/A"}\n'
+          f'                         IVR: {meta.ivr}\n'
+          f'                      RSI 20: {meta.rsi20}\n'
+          f'                      Vol 30: {meta.vol30}\n'
+          f'            Open interest 30: {meta.oi30}\n'
+          f'               Next earnings: {meta.next_earnings}\n'
+          f'   Short term outlook (20 d): {meta.short_outlook}\n'
+          f'     Mid term outlook (50 d): {meta.mid_outlook}\n'
+          f'   Long term outlook (100 d): {meta.long_outlook}\n'
+          f'              Analyst rating: {meta.analyst_rating:.2f}')
+
+    def perform_checks():
+
+        def binary_events_present():
+
+            """
+                returns true if undefined binary events can occur,
+                returns the date of the earliest event as datetime object if any otherwise
+                else returns false
+                """
+
+            # don't trade healthcare
+            if meta.sector == "Healthcare":
+                return True
+
+            if meta.next_earnings and meta.next_earnings != "N/A" and strat_cons.avoid_events:
+                ne = datetime.strptime(meta.next_earnings, '%M/%d/%y').strftime("%Y-%m-%d")
+                if ne >= datetime.today().strftime("%Y-%m-%d"):
+                    return ne
+
+            return False
+
+            # todo check for anticipated news
+
+            # todo check for dividends
+
+        def is_liquid():
+
+            r = True
+
+            if meta.vol30 < strat_cons.min_vol30:
+                _warn(f'[{ticker}] Warning! Average daily options volume < {strat_cons.min_vol30}: {meta.vol30}')
+                if strat_cons.strict_mode:
+                    r = False
+
+            if meta.oi30 < strat_cons.min_oi30:
+                _warn(f'[{ticker}] Warning! Average open interest < {strat_cons.min_oi30}: {meta.oi30}')
+                if strat_cons.strict_mode:
+                    r = False
+
+            _debug(f'Liquidity:\n\n'
+                   f'30 day average option volume: {meta.vol30:7d}\n'
+                   f'30 day average open interest: {meta.oi30:7d}\n')
+
+            if not next_puts.empty():
+                put_spr_r, put_spr_abs = get_bid_ask_spread(next_puts, meta.u_ask)
+                if put_spr_r >= 0.10:
+                    _warn(
+                        f'[{ticker}] Warning! Bid/Ask-Spread  is very wide: '
+                        f'Puts = {put_spr_abs:.2f} $ ({put_spr_r * 100:.2f} %)')
+                    if strat_cons.strict_mode:
+                        r = False
+
+                _debug(f'      Put spread ratio (rel):   {int(put_spr_r * 100):3d} %\n'
+                       f'      Put spread ratio (abs):    {put_spr_abs:.2f}')
+
+            if not next_calls.empty():
+                call_spr_r, call_spr_abs = get_bid_ask_spread(next_calls, meta.u_ask)
+                if call_spr_r >= 0.10:
+                    _warn(
+                        f'[{ticker}] Warning! Spread ratio is very wide: '
+                        f'Calls = {call_spr_abs:.2f} $ ({call_spr_r * 100:.2f} %)')
+                    if strat_cons.strict_mode:
+                        r = False
+
+                _debug(f'     Call spread ratio (rel):   {int(call_spr_r * 100):3d} %\n'
+                       f'     Call spread ratio (abs):    {call_spr_abs:.2f}')
+
+            return r
+
+        def assingment_risk_tolerance_exceeded():
+
+            if meta.u_price * 100 > ACCOUNT_BALANCE / 2:
+                s = f'Warning! {ticker.upper()}s price exceeds account risk tolerance! ' \
+                    f'Assignment would result in margin call!' \
+                    f' {meta.u_price * 100:6.2f} $ > {ACCOUNT_BALANCE / 2:8.2f} $'
+                _warn(s)
+                if strat_cons.assignment_must_be_possible:
+                    return
+
+        # <editor-fold desc="1 Binary events">
+        binary_event_date = binary_events_present()
+
+        if type(binary_event_date) is bool and binary_event_date:
+            _warn("Warning! Underlying may be subject to undefined binary events!")
+            if strat_cons.strict_mode:
+                return
+
+        if binary_event_date and type(binary_event_date) is not bool:
+            meta.option_chain = meta.option_chain.expiration_before(binary_event_date)
+
+        # </editor-fold>
+
+        # <editor-fold desc="2 liquidity">
+        """
+            only rough check, options to trade must be checked seperately when chosen
+            """
+        next_puts = meta.option_chain.expiration_next().puts()
+        next_calls = meta.option_chain.expiration_next().calls()
+
+        """
+        if next_puts.empty() or next_calls.empty():
+            _warn(f'[{ticker}] Next puts or next calls empty')  
+            # TODO then just use next expiration or sth, we filter
+            #  for volume alread when getting option chain, beeing too strict here is unnecessarily restrictive
+            return []
+        """
+
+        if not is_liquid():
+            _warn(f'Warning! Underlying seems illiquid!')
+            if strat_cons.strict_mode:
+                return
+
+        # </editor-fold>
+
+        # <editor-fold desc="3 Price">
+        assingment_risk_tolerance_exceeded()
+        # </editor-fold>
+
+        return True
+
+    if not perform_checks():
+        return
+
+    print()
+    print("-" * 120)
+    print("All mandatory checks done! Enter positions ...")
+    print("-" * 120)
+
+    # ----------------------------------------------------------------------------------
+
+    print("\nExample: +1 Jul 14 21 P 10.5 @ 1.34/1.40")
+    long_leg = Position.from_string(input("Long leg: "), ticker, meta.u_ask)
+    print("\nExample: -1 Jul 14 21 P 12 @ 1.5/1.60")
+    short_leg = Position.from_string(input("Short leg: "), ticker, meta.u_ask)
+
+    if long_leg.asset.opt_type != short_leg.asset.opt_type:
+        raise RuntimeError("Both legs must be of same option type (put/call)")
+
+    opt_type = long_leg.asset.opt_type
+
+    # ----------------------------------------------------------------------------------
+
+    supply_custom_strat_params = input("Do you want to supply custom strategy parameters? (Y/N)\n")
+
+    if supply_custom_strat_params != "Y":
+        tp_perc = 50
+        sl_perc = 100
+        latest_close_dte = 21
+    else:
+        try:
+            tp_perc = float(input("TP percentage: "))
+        except:
+            print("Exception occured getting TP percentage, falling back to default of 50%")
+            tp_perc = 50
+
+        try:
+            sl_perc = float(input("SL percentage: "))
+        except:
+            sl_perc = 100
+            print("Exception ocurred getting TP percentage, falling back to default of 100%")
+
+        try:
+            latest_close_dte = int(input("Close no later than N DTE: "))
+        except:
+            latest_close_dte = 21
+            print("Exception ocurred getting latest close DTE, falling back to default of 21 days")
+
+    mcs = MonteCarloSimulator([ticker])
+
+    env = DDict({
+        "IVR": meta.ivr,
+        "IV": meta.imp_vol,
+        "IV outlook": 0,
+
+        "RSI20d": meta.rsi20,
+
+        "short term outlook": meta.short_outlook,
+        "mid term outlook": meta.mid_outlook,
+        "long term outlook": meta.long_outlook,
+
+        "analyst rating": meta.analyst_rating
+    })
+
+    env_con = EnvContainer(env, mcs, meta.option_chain, meta.u_bid, meta.u_ask, ticker, -1)
+
+    spread = CombinedPosition({p.asset.name: p for p in (long_leg, short_leg)},
+                              meta.u_bid, meta.u_ask, meta.ticker, mcs)
+
+    debit_conditions = {
+            "IVR": [low_ivr, neutral_ivr],
+
+            "short term outlook": [bullish] if opt_type == "c" else [bearish],
+            "mid term outlook": [neutral, bullish] if opt_type == "c" else [neutral, bearish],
+
+            "analyst rating": [neutral, bullish] if opt_type == "c" else [neutral, bearish]
+        }
+
+    credit_conditions = {
+            "IVR": [high_ivr],
+
+            "short term outlook": [bullish] if opt_type == "p" else [bearish],
+            "mid term outlook": [neutral, bullish] if opt_type == "p" else [neutral, bearish],
+
+            "analyst rating": [neutral, bullish] if opt_type == "p" else [neutral, bearish]
+        }
+
+    opt_strat = OptionStrategy(name=f'User supplied Vertical {"Credit" if spread.cost < 0 else "Debit"} Spread',
+                               position_builder=lambda: spread,
+                               env=env_con,
+                               conditions=debit_conditions if spread.cost > 0 else credit_conditions,
+                               tp_perc=tp_perc,
+                               sl_perc=sl_perc,
+                               close_dte=latest_close_dte,
+                               recommendation_threshold=-float('inf'))
+
+    print(opt_strat)
+
+    return [opt_strat]
+
+
 # <editor-fold desc="Option Framework">
 
 class Stock:
@@ -842,22 +1062,24 @@ class Position:
         self.set_greeks()
 
     def __repr__(self):
-        return f'{self.quantity:+d} {self.asset} for a cost of {self.cost:.2f} $'
+        return f'{self.quantity} {self.asset} for a cost of {self.cost:.2f} $'
 
     def __str__(self):
         return self.repr()
 
-    def from_string(self, s):
+    @staticmethod
+    def from_string(s, ticker, u_ask):
         parts = s.split()
         if len(parts) == 4:  # it's a stock
             quantity, ticker, _, bid_ask = parts
             bid, ask = bid_ask.split("/")
             return Position(Stock(ticker, float(bid), float(ask)), float(quantity), float(ask))
-        if len(parts) == 7:  # option
+        if len(parts) == 8:  # option
             quantity, month, day, year, opt_type, strike, _, bid_ask = parts
             bid, ask = bid_ask.split("/")
             d_str = f'{month} {day} {year}'
-            return Position(Option.new_parse_option(d_str, opt_type, float(strike), float(bid), float(ask)),
+            return Position(Option.new_parse_option(d_str, opt_type, float(strike), float(bid), float(ask),
+                                                    u_ask, ticker),
                             float(quantity), float(ask))
 
     def to_dict(self):
@@ -907,7 +1129,7 @@ class Position:
             voloi = f'(OI: {int(self.asset.oi):>8d},  ' \
                     f'Vol: {int(self.asset.vol):>8d}, ' \
                     f'ImpVol: {float(self.asset.iv) * 100: >3.2f} %)'
-        return f'{indent}{self.quantity:+d} {self.asset} = {self.cost:+.2f} $\t\t{voloi}'
+        return f'{indent}{self.quantity: >+8.2f} {self.asset} = {self.cost: >+8.2f} $\t\t{voloi}'
 
     def repr(self, t=0):
         indent = "\t" * t
@@ -1396,6 +1618,9 @@ class OptionChain:
     # </editor-fold>
 
     # <editor-fold desc="Expiry">
+
+    # todo after n DTE
+
     def expiration_range(self, lower_dte, upper_dte):
         """
         :param lower_dte:
@@ -1425,6 +1650,21 @@ class OptionChain:
             return self
 
         f = self.options.loc[self.options['expiration'] <= exp_date]  # works because dates are in ISO form
+        if type(f) is pd.Series:
+            f = f.to_frame().T
+        return OptionChain(f)
+
+    def expiration_after(self, exp_date):
+        """
+
+        :param exp_date: date as string YYYY-MM-DD
+        :return:
+        """
+        _debug(f'Filter for expiration after {exp_date}', 2)
+        if self.options.empty:
+            return self
+
+        f = self.options.loc[self.options['expiration'] > exp_date]  # works because dates are in ISO form
         if type(f) is pd.Series:
             f = f.to_frame().T
         return OptionChain(f)
@@ -1844,13 +2084,13 @@ class CombinedPosition:
         self.prob_of_profit = -1
         self.profit_dist_at_first_exp = None
 
-        if self.pos_dict.values():
-            self.update_status()
-
         if not any(type(pos.asset) is Stock for pos in self.pos_dict.values()):
             stock = Stock(ticker, self.u_bid, self.u_ask)
             self.add_asset(stock, 0, no_update=True)
         self.stock = self.pos_dict[self.underlying]
+
+        if any(pos.quantity != 0 for pos in self.pos_dict.values()):
+            self.update_status()
 
         self.greeks = self.get_greeks()
         self.theta_to_delta = float(self.greeks["theta"] / float(max(abs(self.greeks["delta"]), 0.00001)))
@@ -2014,7 +2254,7 @@ class CombinedPosition:
         self.rom = self.get_rom()
         self.rom50 = self.rom / 2
         self.prof_time = self.max_profit / max(1, self.dte_until_first_exp())
-        self.prof_time50 = self.max_profit / (2*min(21, self.dte_until_first_exp()))
+        self.prof_time50 = self.max_profit / (2*max(21, self.dte_until_first_exp()))  # todo does not make sense yet
 
         # pop ptp psl
         # todo mcs gives only option value? what about naked shorts for example? stock in comb pos? ->
@@ -3123,7 +3363,8 @@ class OptionStrategy:
 
     @staticmethod
     def build_comb_pos(env_container, *legs):
-        if all(legs):  # no legs are empty, have to supply doulbe legs multiple times
+        # todo why not supply them all at once in a dict?
+        if all(legs):  # no legs are empty, have to supply double legs multiple times, e.g. for ratio spreads
             cp = CombinedPosition(dict(), env_container.u_bid, env_container.u_ask, env_container.ticker,
                                   env_container.mc)
             for leg in legs:
@@ -3764,12 +4005,16 @@ class CustomStratGenerator:
         if filters:
             for filt in filters:
                 # todo make for more than 1 filter argument
-                private_chain = eval(f'private_chain.{filt[0].__name__}({filt[1]})')
+                if isinstance(filt[1], str):
+                    private_chain = eval(f'private_chain.{filt[0].__name__}("{filt[1]}")')
+                else:
+                    private_chain = eval(f'private_chain.{filt[0].__name__}({filt[1]})')
 
         # <editor-fold desc="Vertical Spread">
 
         _debug(f"[{env.ticker}] Start checking all vertical spreads for ticker {env.ticker} ...")
 
+        strat_check_counter = 0
         strat_name_counter = 1
 
         # set tp perc & sl perc
@@ -3792,6 +4037,8 @@ class CustomStratGenerator:
                 strikes = list(set(df["strike"].tolist()))
                 strikes.sort()
 
+                print(f'{len(strikes)} strikes for expiration: {expiration_date}')
+
                 close_dte = date_str_to_dte(expiration_date) - latest_close_dte
 
                 for long_strike in strikes:
@@ -3799,6 +4046,8 @@ class CustomStratGenerator:
                     for short_strike in strikes:
 
                         if long_strike != short_strike:
+
+                            strat_check_counter += 1
 
                             # <editor-fold desc="setting parameters">
 
@@ -3872,8 +4121,6 @@ class CustomStratGenerator:
                             simple_to_test = [tup for tup in target_param_tuple if tup[0] in simple_attributes]
                             for var, comp, val in simple_to_test:
                                 # calls the function given by val[0] on local correspondant of param from dict
-                                if var == "rom50" and rom == float('inf'):
-                                    print("t")
                                 if not eval(f'{var}.{"__" + comp + "__"}({val})'):
                                     unfitting = True
                                     break
@@ -3881,7 +4128,7 @@ class CustomStratGenerator:
                                     _debug(f'{var}: {var}.{"__" + comp + "__"}({val}) = True', 3)
 
                             if unfitting:
-                                break
+                                continue
 
                             _debug(f'Exp: {expiration_date}, OptType: {opt_type}, '
                                    f'LongS: {long_strike}, ShortS: {short_strike} '
@@ -3934,9 +4181,11 @@ class CustomStratGenerator:
                                     _debug(f'{var}: opt_strat.{var}.{"__" + comp + "__"}({val}) = True', 3)
 
                             if unfitting:
-                                break
+                                continue
 
                             yield opt_strat
+
+        print(f'Checked {strat_check_counter} strategies!')
 
         # </editor-fold>
 
@@ -3990,6 +4239,7 @@ def get_market_recommendations(ticker_f, start_from=None, use_predef=False, _ssc
             _warn(f'Exception occured when getting strategies for ticker {t}: {e}\n'
                   f'{traceback.print_tb(e.__traceback__)}', level=2)
             continue
+
 
 
 # AAPL
@@ -4142,17 +4392,18 @@ if __name__ == "__main__":
 
     t = "amc"
     ssc = (
-        ("risk", "le", 150),
+        ("risk", "le", 100),
         ("rom", "le", 1),  # just to prefilter and make things faster
         ("max_gain", "ge", 10),
-        ("rom50", "ge", 0.3),
-        ("rom50", "le", 10),
+        ("rom50", "ge", 0.2),
+        ("rom50", "le", 5),
         # "e_tp_close": ("ge", 10),
     )
     f = [
         [OptionChain.volume, 10],
-        # [OptionChain.expiration_close_to_dte, 45]
+        [OptionChain.expiration_after, "2021-06-20"]
     ]
+
     """
     propose_strategies(t,
                        StrategyConstraints(strict_mode=False,
@@ -4163,9 +4414,17 @@ if __name__ == "__main__":
                        auto=True,
                        use_predefined_strats=False,
                        single_strat_cons=ssc,
-                       filters=f)
+                       filters=f,
+                       mode="manual")
     # """
 
-    get_market_recommendations(get_trending_theta_strat_tickers, use_predef=True, _ssc=ssc, _filters=f)
+    """
+    check_spread(StrategyConstraints(strict_mode=False,
+                                     min_oi30=1000,
+                                     min_vol30=1000,
+                                     min_sinle_opt_vol=10))
+    #"""
 
-    # binom_test()
+    get_market_recommendations(get_trending_theta_strat_tickers, use_predef=False, _ssc=ssc, _filters=f)
+
+

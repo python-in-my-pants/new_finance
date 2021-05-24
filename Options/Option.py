@@ -2,7 +2,7 @@ import pandas as pd
 from Option_utility import *
 from DDict import DDict
 from option_greeks import get_greeks
-from Option_strategy_selector import get_risk_free_rate
+from Libor import get_risk_free_rate
 
 
 class Option:
@@ -41,21 +41,23 @@ class Option:
         self.oi = oi
 
     @staticmethod
-    def new_parse_option(date_str: str, opt_type: str, strike: float, bid: float, ask: float):
+    def new_parse_option(date_str: str, opt_type: str, strike: float, bid: float, ask: float, u_ask: float, ticker: str):
 
-        dte = date_to_dte(str_to_date(date_str))
-        opt_price, iv, delta, gamma, theta, vega, rho = get_greeks(opt_type,
-                                                                   ask,
+        exp_date = opt_date_str_to_date(date_str)
+        exp_date_str = datetime_to_str(exp_date)
+        dte = date_to_dte(exp_date)
+        opt_price, iv, delta, gamma, theta, vega, rho = get_greeks(opt_type.lower(),
+                                                                   u_ask,
                                                                    strike,
-                                                                   max(dte, 0.001),
+                                                                   max(dte/365.0, 0.001),
                                                                    get_risk_free_rate(dte / 365.0),
                                                                    None,
                                                                    0,
                                                                    ask)
 
         # name, opt_type, expiration, strike, bid, ask, vol, delta, gamma, theta, vega, rho, iv, oi
-        return Option(f'{date_str} {opt_type.upper()} {strike}', opt_type, date_str, strike, bid, ask,
-                      -1, delta, gamma, theta, vega, rho, iv, -1)
+        return Option(f'{ticker.upper()}{date_to_opt_name_format(exp_date)}{opt_type.upper()}{int(strike*1000):08}',
+                      opt_type.lower(), exp_date_str, strike, bid, ask, -1, delta, gamma, theta, vega, rho, iv, -1)
 
     def parse_option(self, opt_string):
 
