@@ -27,6 +27,21 @@ def interactive():
             print(e)
 
 
+class StopWatch:
+
+    def __init__(self, s):
+        self._start_time = time.time()
+        self._rounds = [self._start_time]
+        print(f"Starting StopWatch {s}")
+
+    def take_time(self, s):
+        t = time.time()
+        t_from_start = t - self._start_time
+        t_from_last = t - self._rounds[-1]
+        self._rounds.append(t)
+        #print(f'{s} finished in {t_from_last:.8f} ({t_from_start:.8f} since start)')
+
+
 def timeit(func):
     def inner(*args, **kwargs):
         start = time.time()

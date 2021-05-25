@@ -4037,7 +4037,7 @@ class CustomStratGenerator:
                 strikes = list(set(df["strike"].tolist()))
                 strikes.sort()
 
-                print(f'{len(strikes)} strikes for expiration: {expiration_date}')
+                #print(f'{len(strikes)} strikes for expiration: {expiration_date}')
 
                 close_dte = date_str_to_dte(expiration_date) - latest_close_dte
 
@@ -4185,7 +4185,7 @@ class CustomStratGenerator:
 
                             yield opt_strat
 
-        print(f'Checked {strat_check_counter} strategies!')
+        _debug(f'Checked {strat_check_counter} strategies!', 1)
 
         # </editor-fold>
 
@@ -4397,6 +4397,7 @@ if __name__ == "__main__":
         ("max_gain", "ge", 10),
         ("rom50", "ge", 0.2),
         ("rom50", "le", 5),
+        ("close_pn", "ge", 0.5),
         # "e_tp_close": ("ge", 10),
     )
     f = [

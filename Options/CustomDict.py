@@ -8,10 +8,15 @@ class CustomDict(dict):
         values = list(self.keys())
         pos = bisect_left(values, item)
 
-        if pos == 0:
-            return values[0]
-        if pos == len(values):
-            return values[-1]
+        #if pos == 0:
+        #    return values[0]
+
+        if pos == 0 or pos >= len(values):
+            raise KeyError
+
+        #if pos == len(values):
+        #    return values[-1]
+
         before = values[pos - 1]
         after = values[pos]
         if after - item < item - before:

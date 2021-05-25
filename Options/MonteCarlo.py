@@ -8,7 +8,7 @@ import pickle
 from DDict import DDict
 from eu_option import EuroOption
 from CustomDict import CustomDict
-from Utility import timeit, median
+from Utility import timeit, median, StopWatch
 from Option import Option
 from Option_utility import datetime_to_dte, round_cut
 from option_greeks import get_greeks
@@ -343,6 +343,8 @@ class MonteCarloSimulator(object):
         # ################################################################################################# #
         # constants
 
+        stop_watch = StopWatch("get_pn_psl")
+
         stock_price_resolution = 100  # height of matrix
 
         if debug:
@@ -376,6 +378,8 @@ class MonteCarloSimulator(object):
         iterations = len(simulated_stock_prices.iloc[0, :])
         # </editor-fold>
 
+        stop_watch.take_time("set up parameters")
+
         # ############################################################################################################ #
 
         # <editor-fold desc="Set IV and increments">
@@ -384,17 +388,18 @@ class MonteCarloSimulator(object):
             deviation = (first_dte + 1) / 365.0 * imp_vol * current_stock_price
             min_stock = max(option_strat.env_container.u_ask - deviation, 0.01)
             max_stock = option_strat.env_container.u_ask + deviation
-        elif True:
+        elif False:
             # option 1: use min & max from monte sim_stock_prices
             min_stock, max_stock = simulated_stock_prices.min(), simulated_stock_prices.max()
             if type(min_stock) is pd.Series:
                 min_stock, max_stock = min_stock.min(), max_stock.max()
-        elif False:
+        elif True:
             min_stock = max(0.01, current_stock_price / 10)
-            max_stock = current_stock_price * 2
+            max_stock = current_stock_price * 3
         else:
-            min_stock = max(0, current_stock_price - 3 * option_strat.positions.expected_move)
-            max_stock = current_stock_price + 3 * option_strat.positions.expected_move
+            n_std_dev = 3
+            min_stock = max(0, current_stock_price - n_std_dev * option_strat.positions.expected_move)
+            max_stock = current_stock_price + n_std_dev * option_strat.positions.expected_move
 
         stock_price_increment = (max_stock - min_stock) / (stock_price_resolution + 1)
 
@@ -402,6 +407,8 @@ class MonteCarloSimulator(object):
             print(f'Min stock: {min_stock}, Max stock: {max_stock}, Increment: {stock_price_increment}')
 
         # </editor-fold>
+
+        stop_watch.take_time("set IV and increments")
 
         def precompute_strat_gains() -> List[CustomDict]:
             # (stock_price_res+1) * (first_dte+1) entries
@@ -419,6 +426,8 @@ class MonteCarloSimulator(object):
             return _strat_gains
 
         strat_gains = precompute_strat_gains()
+
+        stop_watch.take_time("precompute strat gains")
 
         def get_break_even_on_day(day):
             best_stock_price = -1
@@ -530,6 +539,8 @@ class MonteCarloSimulator(object):
                     print(f'Weird day: d={d},'
                           f'\n\tAvg gain: {sum([gains_at_day[d][i] for i in range(b - a)]) / (b - a)},'
                           f'\n\tAvg price: {sum(simulated_stock_prices.loc[d, :].to_list()) / (b - a)}')
+
+                stop_watch.take_time(f"iterate over day {d}")
 
             # <editor-fold desc="stuff">
             # ######################################################################################################## #
@@ -656,6 +667,8 @@ class MonteCarloSimulator(object):
             close_pop += in_close_pop
             close_pn += in_close_pn
             close_be += in_close_be
+
+            stop_watch.take_time("inner iteration")
 
         p_tp /= outer_iterations
         p_sl /= outer_iterations
