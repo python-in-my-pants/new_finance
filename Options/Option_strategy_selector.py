@@ -1619,8 +1619,6 @@ class OptionChain:
 
     # <editor-fold desc="Expiry">
 
-    # todo after n DTE
-
     def expiration_range(self, lower_dte, upper_dte):
         """
         :param lower_dte:
@@ -1630,11 +1628,15 @@ class OptionChain:
         _debug(f'Filter for expiration in range {lower_dte}-{upper_dte} DTE', 2)
         if self.options.empty:
             return self
-        dates = pd.date_range(start=datetime.now() + timedelta(days=lower_dte),
-                              end=datetime.now() + timedelta(days=upper_dte),
-                              normalize=True)
+        start_day = datetime_to_str(datetime.now() + timedelta(days=lower_dte))
+        end_day = datetime_to_str(datetime.now() + timedelta(days=upper_dte))
+        """        
+        dates = list(pd.date_range(start=datetime.now() + timedelta(days=lower_dte),
+                                   end=datetime.now() + timedelta(days=upper_dte),
+                                   normalize=True))
+        """
         # todo works?
-        f = self.options.loc[self.options['expiration'] in dates]
+        f = self.options.loc[(self.options['expiration'] >= start_day) & (self.options['expiration'] <= end_day)]
         if type(f) is pd.Series:
             f = f.to_frame().T
         return OptionChain(f)
@@ -1650,6 +1652,36 @@ class OptionChain:
             return self
 
         f = self.options.loc[self.options['expiration'] <= exp_date]  # works because dates are in ISO form
+        if type(f) is pd.Series:
+            f = f.to_frame().T
+        return OptionChain(f)
+
+    def expiration_before_dte(self, dte):
+        """
+        :param dte:
+        :param exp_date: date as string YYYY-MM-DD
+        :return:
+        """
+        _debug(f'Filter for expiration before {dte} DTE', 2)
+        if self.options.empty:
+            return self
+
+        f = self.options.loc[self.options['expiration'] < datetime_to_str(date_to_dte(dte))]  # works because dates are in ISO form
+        if type(f) is pd.Series:
+            f = f.to_frame().T
+        return OptionChain(f)
+
+    def expiration_after_dte(self, dte):
+        """
+        :param dte:
+        :param exp_date: date as string YYYY-MM-DD
+        :return:
+        """
+        _debug(f'Filter for expiration after {dte} DTE', 2)
+        if self.options.empty:
+            return self
+
+        f = self.options.loc[self.options['expiration'] > datetime_to_str(date_to_dte(dte))]  # works because dates are in ISO form
         if type(f) is pd.Series:
             f = f.to_frame().T
         return OptionChain(f)
@@ -2701,7 +2733,8 @@ class CombinedPosition:
 
             return list(profit_dist)
 
-        _warn("Profit dist at exp returned none as there are multiple different expiries")
+        _warn("Profit dist at exp returned None as there are multiple different expiries")
+        raise RuntimeError("Profit dist at exp returned None as there are multiple different expiries")
 
     def get_max_profit(self):
         """
@@ -4004,11 +4037,14 @@ class CustomStratGenerator:
         private_chain = deepcopy(chain)
         if filters:
             for filt in filters:
-                # todo make for more than 1 filter argument
-                if isinstance(filt[1], str):
-                    private_chain = eval(f'private_chain.{filt[0].__name__}("{filt[1]}")')
-                else:
-                    private_chain = eval(f'private_chain.{filt[0].__name__}({filt[1]})')
+                arg_string = ""
+                for arg in filt[1:]:
+                    if isinstance(arg, str):
+                        arg_string += f'"{arg}",'
+                    else:
+                        arg_string += f'{arg},'
+
+                private_chain = eval(f'private_chain.{filt[0].__name__}({arg_string[:-1]})')
 
         # <editor-fold desc="Vertical Spread">
 
@@ -4164,6 +4200,8 @@ class CustomStratGenerator:
                                                        close_dte=latest_close_dte,
                                                        recommendation_threshold=-float('inf'))
 
+                            #print(opt_strat)
+
                             strat_name_counter += 1
 
                             # check other specific conditions here
@@ -4226,6 +4264,7 @@ def get_market_recommendations(ticker_f, start_from=None, use_predef=False, _ssc
     print(f"[{get_timestamp()}] Start getting market recommendations")
     constraints = StrategyConstraints(strict_mode=False, min_oi30=100, min_vol30=1000, min_sinle_opt_vol=0)
     tickers = ticker_f()
+    #tickers = ["nio"]
     mcs = MonteCarloSimulator(tickers)
     if start_from:
         tickers = tickers[tickers.index(start_from):]
@@ -4239,11 +4278,6 @@ def get_market_recommendations(ticker_f, start_from=None, use_predef=False, _ssc
             _warn(f'Exception occured when getting strategies for ticker {t}: {e}\n'
                   f'{traceback.print_tb(e.__traceback__)}', level=2)
             continue
-
-
-
-# AAPL
-# theta for long call is huge, is this correct?
 
 
 def binom_test():
@@ -4393,16 +4427,16 @@ if __name__ == "__main__":
     t = "amc"
     ssc = (
         ("risk", "le", 100),
-        ("rom", "le", 1),  # just to prefilter and make things faster
-        ("max_gain", "ge", 10),
+        ("rom", "le", 2),  # just to prefilter and make things faster
+        ("max_gain", "ge", 20),
         ("rom50", "ge", 0.2),
         ("rom50", "le", 5),
-        ("close_pn", "ge", 0.5),
+        ("close_pn", "ge", 0.6),
         # "e_tp_close": ("ge", 10),
     )
     f = [
         [OptionChain.volume, 10],
-        [OptionChain.expiration_after, "2021-06-20"]
+        [OptionChain.expiration_range, 30, 90]
     ]
 
     """
@@ -4427,5 +4461,3 @@ if __name__ == "__main__":
     #"""
 
     get_market_recommendations(get_trending_theta_strat_tickers, use_predef=False, _ssc=ssc, _filters=f)
-
-
