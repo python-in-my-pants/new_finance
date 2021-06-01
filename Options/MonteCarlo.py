@@ -19,6 +19,7 @@ from Utility import flatten
 from pandasgui import show
 from datetime import datetime, timedelta, date
 from typing import List
+from copy import copy
 
 debug = False
 
@@ -46,10 +47,12 @@ class MonteCarloSimulator(object):
     ticker, days, iterations -> pop, p_n, p_sl
     """
 
-    def __init__(self, tickers: list, days: int = 1000, iterations: int = 10 ** 3):
+    def __init__(self, tickers_list: list, days: int = 1000, iterations: int = 10 ** 3):
 
         if debug:
             print("Building monte carlo simulator ...")
+
+        tickers = copy(tickers_list)
         tickers.append("msft")
         tickers.sort()
         self.tickers = [t.lower() for t in tickers]
@@ -493,7 +496,8 @@ class MonteCarloSimulator(object):
             sl_hits_before_close = 0
 
             gains_at_close = []
-            gains_at_day = [[0 for _ in range(upper_iteration_limit - lower_iteration_limit)] for _ in range(first_dte + 1)]
+            gains_at_day = np.asmatrix(
+                [[0.0 for _ in range(upper_iteration_limit - lower_iteration_limit)] for _ in range(first_dte + 1)])
             anomaly_day = 0
 
             for d in range(first_dte + 1):  # iterate over days, day 0 is now, day 1 is todays close etc
@@ -526,16 +530,21 @@ class MonteCarloSimulator(object):
                     except KeyError:
                         gain = option_strat.positions.get_profit_n_dte(first_dte - d, sim_stock_price, risk_free_rate)
 
-                    gains_at_day[d][i] = gain
+                    gains_at_day[d, i] = gain
 
                     if close_days == d:
                         gains_at_close.append(gain)
 
                     if gain >= tp:
                         tp_hits_this_day += 1
+
                         done_iterations.add(i)
                         tp_hit_days += 1
                         tp_hit_days_list.append(d)
+
+                        # set all future gains for this iteration to current gain as we end on it
+                        gains_at_day[d+1:, i] = gain
+
                         if d < close_days:  # has to be < instead of <= bc for close pop, we already count gains_at_close,
                             # otherwise tp hits on close day would be counted twice
                             tp_hits_before_close += 1
@@ -543,6 +552,10 @@ class MonteCarloSimulator(object):
                     if gain <= sl:
                         done_iterations.add(i)
                         sl_hit_days += 1
+
+                        # set all future gains for this iteration to current gain as we end on it
+                        gains_at_day[d+1:, i] = gain
+
                         if d < close_days:
                             sl_hits_before_close += 1
                         continue
@@ -643,6 +656,11 @@ class MonteCarloSimulator(object):
             _close_pn = (sum(tp_hits_at_close) + tp_hits_before_close - sl_hits_before_close) / \
                         (upper_iteration_limit - lower_iteration_limit) #(len(gains_at_close) + tp_hits_before_close + sl_hits_before_close)
 
+            expected_gains_on_day = [
+                sum(gains_at_day[d].tolist()[0]) / (upper_iteration_limit-lower_iteration_limit)
+                for d in range(first_dte+1)
+            ]
+
             if debug:
                 print(f'\n'
                       f'     Iteration diff: { (upper_iteration_limit - lower_iteration_limit)}\n\n'
@@ -656,10 +674,12 @@ class MonteCarloSimulator(object):
                       f' Gains at close len: {len(gains_at_close)}')
                 print(f'           Close PN: {_close_pn:.5f}\n')
 
-            return tp_hit_days / (upper_iteration_limit - lower_iteration_limit), sl_hit_days / (upper_iteration_limit - lower_iteration_limit), \
+            return tp_hit_days / (upper_iteration_limit - lower_iteration_limit), \
+                   sl_hit_days / (upper_iteration_limit - lower_iteration_limit), \
                    _tp_d_med, _tp_d_avg, \
                    _close_pop, _close_pn, \
-                   get_break_even_on_day(close_days)
+                   get_break_even_on_day(close_days), \
+                   expected_gains_on_day
 
         # <editor-fold desc="Compute probs">
 
@@ -670,10 +690,11 @@ class MonteCarloSimulator(object):
 
         # todo use median instead of avg
         p_tp, p_sl, tp_d_med, tp_d_avg, close_pop, close_pn, close_be = 0, 0, 0, 0, 0, 0, 0
+        exp_gains_on_day = [0 for _ in range(first_dte+1)]
 
         for outer_loop_iter in range(epochs):
 
-            in_p_tp, in_p_sl, in_tp_d_med, in_tp_d_avg, in_close_pop, in_close_pn, in_close_be = \
+            in_p_tp, in_p_sl, in_tp_d_med, in_tp_d_avg, in_close_pop, in_close_pn, in_close_be, in_exp_gains = \
                 track_price_paths(outer_loop_iter * batch_size, (outer_loop_iter + 1) * batch_size)
 
             p_tp += in_p_tp
@@ -683,6 +704,9 @@ class MonteCarloSimulator(object):
             close_pop += in_close_pop
             close_pn += in_close_pn
             close_be += in_close_be
+
+            for i in range(len(exp_gains_on_day)):
+                exp_gains_on_day[i] += in_exp_gains[i]
 
             if debug:
                 stop_watch.take_time("inner iteration")
@@ -694,6 +718,9 @@ class MonteCarloSimulator(object):
         close_pop /= epochs
         close_pn /= epochs
         close_be /= epochs
+
+        for i in range(len(exp_gains_on_day)):
+            exp_gains_on_day[i] /= epochs
 
         if debug:
             print(f'\nPn_Psl results with iterations={epochs}, simulation size={iterations}:\n'
@@ -709,7 +736,7 @@ class MonteCarloSimulator(object):
 
         # </editor-fold>
 
-        return p_tp, p_sl, tp_d_med, tp_d_avg, close_pop, close_pn, close_be
+        return p_tp, p_sl, tp_d_med, tp_d_avg, close_pop, close_pn, close_be, exp_gains_on_day
 
     def get_pop_pn_sl(self, option_strat, risk_free_rate):
 
@@ -722,8 +749,8 @@ class MonteCarloSimulator(object):
                                     option_strat.positions.max_profit_point,
                                     option_strat.positions.greeks["delta"])
 
-        ptp, psl, tp_med, tp_avg, close_pop, close_pn, close_be = self.get_pn_psl(option_strat,
-                                                                                  risk_free_rate)  # , mode="bjerksund")
+        ptp, psl, tp_med, tp_avg, close_pop, close_pn, close_be, exp_gains = \
+            self.get_pn_psl(option_strat, risk_free_rate)  # , mode="bjerksund")
         if debug:
             print(f'pop: {prob_of_prof:.2f}, ptp {ptp:.2f}, psl {psl:.2f}, tp_med {tp_med}, tp_avg {tp_avg}, '
                   f'close_pop {close_pop:.2f}, close_pn {close_pn:.2f}')
@@ -745,6 +772,8 @@ class MonteCarloSimulator(object):
             "close_pn": close_pn,
             # break even on close day EOD
             "close_be": close_be,
+            # expected gains on day
+            "exp_gains": exp_gains,
         })
 
 

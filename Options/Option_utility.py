@@ -1,6 +1,8 @@
 import numpy as np
 from datetime import datetime, date, timedelta
 import time
+from pandas import DataFrame
+import pickle
 
 
 def round_cut(x, n=0):
@@ -12,6 +14,23 @@ def round_cut(x, n=0):
 def get_timestamp():
     ts = time.time()
     return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
+
+
+def pickle_dataframe(data_df: DataFrame, filename: str):
+
+    try:
+        print(f'Creating file:\n\t{filename}.pickle ...')
+
+        with open(filename + ".pickle", "wb") as file:
+            pickle.dump(data_df, file)
+
+        print("File created successfully!")
+
+    except FileNotFoundError as e:
+        print("While creating the file", filename, "an exception occurred:", e)
+
+
+
 
 # <editor-fold desc="Requirements">
 

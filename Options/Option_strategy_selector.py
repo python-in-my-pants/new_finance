@@ -34,7 +34,7 @@ ipdb.set_trace()
 
 pritn = print
 
-online = False
+online = True
 force_chain_download = True and online
 force_meta_download = True and online
 
@@ -44,7 +44,7 @@ debug_level = 1
 ACCOUNT_BALANCE = 1471
 DEFAULT_THRESHOLD = .3
 
-#np.seterr(all='raise')
+# np.seterr(all='raise')
 
 
 # <editor-fold desc="Miscellaneous">
@@ -59,9 +59,9 @@ if not online:
 
 def _debug(*args):
     # higher level = more detail
-    l = args[-1]
-    if type(l) == int:
-        level = l
+    _l = args[-1]
+    if type(_l) == int:
+        level = _l
         if debug and level <= debug_level:
             print()
             print(*args[:-1])
@@ -137,21 +137,21 @@ def get_options_meta_data(symbol):
         ivr, imp_vol, vol30, oi30 = 0, 0, 0, 0
         next_earnings = ""
 
-        for i, t in enumerate(text):
+        for i, _t in enumerate(text):
             try:
-                if 'IV Rank' in t and "%" in text[i + 2]:
+                if 'IV Rank' in _t and "%" in text[i + 2]:
                     ivr = float(text[i + 2].replace("%", ""))
-                if 'Implied Volatility' in t and "%" in text[i + 2] and not "Change" in text[i + 2]:
+                if 'Implied Volatility' in _t and "%" in text[i + 2] and not "Change" in text[i + 2]:
                     imp_vol = float(text[i + 2].replace("%", "")) / 100.0
-                if 'Volume Avg (30-Day)' in t and vol30 == 0:  # option volume
+                if 'Volume Avg (30-Day)' in _t and vol30 == 0:  # option volume
                     vol30 = int(text[i + 2].replace(",", ""))
-                if 'Open Int (30-Day)' in t and oi30 == 0:
+                if 'Open Int (30-Day)' in _t and oi30 == 0:
                     oi30 = int(text[i + 2].replace(",", ""))
             except Exception as e:
                 _warn(f"Getting options meta data failed for ticker {symbol} with exception: {e}")
 
             try:
-                if "Next Earnings Date" in t and not next_earnings:
+                if "Next Earnings Date" in _t and not next_earnings:
                     # print(text[i+1], text[i+2], text[i+3])
                     next_earnings = text[i + 2].replace(" ", "")
             except Exception as e:
@@ -414,8 +414,8 @@ class MetaData:
     @staticmethod
     def from_file(filename):
         try:
-            f = pickle.load(open(filename, "rb"))
-            return f
+            _f = pickle.load(open(filename, "rb"))
+            return _f
         except Exception as e:
             print("While reading the file", filename, "an exception occurred:", e)
 
@@ -490,7 +490,7 @@ def download_meta_data(ticker, min_single_opt_vol=0) -> Optional[MetaData]:
 
 
 def get_monte_carlo(ticker):
-    return MonteCarloSimulator(tickers=ticker)
+    return MonteCarloSimulator(tickers_list=ticker)
 
 
 class StrategyConstraints:
@@ -518,10 +518,11 @@ class StrategyConstraints:
 
 
 @timeit
-def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
-                       monte_carlo: MonteCarloSimulator, auto: bool = False, use_predefined_strats: bool = True,
+def propose_strategies(ticker: str, strat_cons: StrategyConstraints, monte_carlo: MonteCarloSimulator,
+                       pos_df: pd.DataFrame = None,
+                       use_predefined_strats: bool = True,
                        single_strat_cons: tuple = None,
-                       filters: List[List[Union[Callable, float]]] = None):
+                       filters: List[List[Union[Callable, float]]] = None) -> pd.DataFrame:
     # todo get short term price outlook (technical analysis, resistances from barchart.com etc)
 
     # todo supply custom environment (like outlooks)
@@ -539,6 +540,9 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
 
     # todo weiht start dtes with vix (mean ca 16) if vix is 14 for example, 1-(14/16) = x; sqrt(1/x) * dte = new dte
     #  45 dte is base
+
+    if pos_df is None:
+        pos_df = pd.DataFrame()
 
     ticker = ticker.upper()
 
@@ -745,28 +749,21 @@ def propose_strategies(ticker: str, strat_cons: StrategyConstraints,
                                                               strat_type="vertical spread",
                                                               filters=filters)
 
-    if auto:
-        with io.open("Strategy summary.txt", "a", encoding="utf-8") as myfile:
-            for pos in proposed_strategies:
-                if pos.positions:
-                    myfile.write(str(pos))
-    else:
-        pos_df = pd.DataFrame()
+    with io.open(f'StrategySummary-{get_timestamp().split()[0].replace(":", "-")}.txt',
+                 "a", encoding="utf-8") as myfile:
         for pos in proposed_strategies:
             if pos.positions:
                 print(pos)
-                # todo make the legs dataframes, otherwise only the last leg is shown
+                myfile.write(str(pos))
                 pos_df = pd.concat([pos_df, pos.to_df()], copy=False, ignore_index=True)
                 # pos.positions.plot_profit_dist_on_first_exp()
-        try:
-            show(pos_df)
-        except Exception:
-            pass
+
+    return pos_df
 
 
 def check_spread(strat_cons: StrategyConstraints):
 
-    ticker = "AMC"#input("Ticker: ")
+    ticker = input("Ticker: ")
 
     ticker = ticker.upper()
 
@@ -1122,8 +1119,8 @@ class Position:
 
         self.set_greeks()
 
-    def short(self, t=0):
-        indent = "\t" * t
+    def short(self, _t=0):
+        indent = "\t" * _t
         voloi = ""
         if type(self.asset) is Option:
             voloi = f'(OI: {int(self.asset.oi):>8d},  ' \
@@ -1131,8 +1128,8 @@ class Position:
                     f'ImpVol: {float(self.asset.iv) * 100: >3.2f} %)'
         return f'{indent}{self.quantity: >+8.2f} {self.asset} = {self.cost: >+8.2f} $\t\t{voloi}'
 
-    def repr(self, t=0):
-        indent = "\t" * t
+    def repr(self, _t=0):
+        indent = "\t" * _t
         return f'{indent}{self.quantity:+d} {self.asset} for a cost of {self.cost:.2f} $' \
                f'\n' \
                f'\n' \
@@ -1356,14 +1353,17 @@ class Position:
             # dte_now = date_str_to_dte(self.asset.expiration)
             dte_then = (str_to_date(self.asset.expiration) - str_to_date(d)).days
 
+            """
             # forecasted extrinsic value of long option when short option expires
             if self.asset.opt_type == "p":
                 current_intr = self.asset.strike - self.underlying_price
-
-            if self.asset.opt_type == "c":
+            elif self.asset.opt_type == "c":
                 current_intr = self.underlying_price - self.asset.strike
+            else:
+                raise RuntimeError("Option type must be 'c' or 'p'")
 
             current_intr = max(0, current_intr)
+            """
 
             # current_extr_per_opt = self.asset.ask - current_intr
             # we can only forecast this for the current option at the current underlying price
@@ -1385,8 +1385,10 @@ class Position:
 
                 if self.quantity > 0:
                     profit_at_strike = self.quantity * future_price * 100 - self.cost
-                if self.quantity < 0:
+                elif self.quantity < 0:
                     profit_at_strike = -self.cost + self.quantity * future_price * 100
+                else:
+                    profit_at_strike = 0
 
                 exp_profit_dist[u_price] = profit_at_strike
 
@@ -1583,10 +1585,10 @@ class OptionChain:
         _debug("Filter for puts", 2)
         if self.options.empty:
             return self
-        f = self.options.loc[self.options['contract'] == "p"]
-        if type(f) is pd.Series:
-            f = f.to_frame().T
-        return OptionChain(f)
+        _f = self.options.loc[self.options['contract'] == "p"]
+        if type(_f) is pd.Series:
+            _f = _f.to_frame().T
+        return OptionChain(_f)
 
     def calls(self):
         _debug("Filter for calls", 2)
@@ -1636,10 +1638,10 @@ class OptionChain:
                                    normalize=True))
         """
         # todo works?
-        f = self.options.loc[(self.options['expiration'] >= start_day) & (self.options['expiration'] <= end_day)]
-        if type(f) is pd.Series:
-            f = f.to_frame().T
-        return OptionChain(f)
+        _f = self.options.loc[(self.options['expiration'] >= start_day) & (self.options['expiration'] <= end_day)]
+        if type(_f) is pd.Series:
+            _f = _f.to_frame().T
+        return OptionChain(_f)
 
     def expiration_before(self, exp_date):
         """
@@ -1651,22 +1653,21 @@ class OptionChain:
         if self.options.empty:
             return self
 
-        f = self.options.loc[self.options['expiration'] <= exp_date]  # works because dates are in ISO form
-        if type(f) is pd.Series:
-            f = f.to_frame().T
-        return OptionChain(f)
+        _f = self.options.loc[self.options['expiration'] <= exp_date]  # works because dates are in ISO form
+        if type(_f) is pd.Series:
+            _f = _f.to_frame().T
+        return OptionChain(_f)
 
     def expiration_before_dte(self, dte):
         """
         :param dte:
-        :param exp_date: date as string YYYY-MM-DD
         :return:
         """
         _debug(f'Filter for expiration before {dte} DTE', 2)
         if self.options.empty:
             return self
 
-        f = self.options.loc[self.options['expiration'] < datetime_to_str(date_to_dte(dte))]  # works because dates are in ISO form
+        f = self.options.loc[self.options['expiration'] < datetime_to_str(date_to_dte(dte))]
         if type(f) is pd.Series:
             f = f.to_frame().T
         return OptionChain(f)
@@ -1674,17 +1675,16 @@ class OptionChain:
     def expiration_after_dte(self, dte):
         """
         :param dte:
-        :param exp_date: date as string YYYY-MM-DD
         :return:
         """
         _debug(f'Filter for expiration after {dte} DTE', 2)
         if self.options.empty:
             return self
 
-        f = self.options.loc[self.options['expiration'] > datetime_to_str(date_to_dte(dte))]  # works because dates are in ISO form
-        if type(f) is pd.Series:
-            f = f.to_frame().T
-        return OptionChain(f)
+        _f = self.options.loc[self.options['expiration'] > datetime_to_str(date_to_dte(dte))]
+        if type(_f) is pd.Series:
+            _f = _f.to_frame().T
+        return OptionChain(_f)
 
     def expiration_after(self, exp_date):
         """
@@ -1696,10 +1696,10 @@ class OptionChain:
         if self.options.empty:
             return self
 
-        f = self.options.loc[self.options['expiration'] > exp_date]  # works because dates are in ISO form
-        if type(f) is pd.Series:
-            f = f.to_frame().T
-        return OptionChain(f)
+        _f = self.options.loc[self.options['expiration'] > exp_date]  # works because dates are in ISO form
+        if type(_f) is pd.Series:
+            _f = _f.to_frame().T
+        return OptionChain(_f)
 
     def expiration_date(self, exp_date):
         """
@@ -1710,10 +1710,10 @@ class OptionChain:
         _debug("Filter for exp date:", exp_date, 2)
         if self.options.empty:
             return self
-        f = self.options.loc[self.options['expiration'] == exp_date]
-        if type(f) is pd.Series:
-            f = f.to_frame().T
-        return OptionChain(f)
+        _f = self.options.loc[self.options['expiration'] == exp_date]
+        if type(_f) is pd.Series:
+            _f = _f.to_frame().T
+        return OptionChain(_f)
 
     def expiration_close_to_dte(self, dte):
         """
@@ -1724,10 +1724,10 @@ class OptionChain:
         _debug("Filter for expiration close to", dte, "dte", 2)
         if self.options.empty:
             return self
-        f = self.options.loc[self.options['expiration'] == get_closest_date(self.expirations, dte)]
-        if type(f) is pd.Series:
-            f = f.to_frame().T
-        return OptionChain(f)
+        _f = self.options.loc[self.options['expiration'] == get_closest_date(self.expirations, dte)]
+        if type(_f) is pd.Series:
+            _f = _f.to_frame().T
+        return OptionChain(_f)
 
     def expiration_next(self, i=0):
         """
@@ -1738,10 +1738,10 @@ class OptionChain:
         _debug(f"Filter for {i}th expiration: ", self.expirations[i], 2)
         if self.options.empty:
             return self
-        f = self.options.loc[self.options['expiration'] == self.expirations[i]]
-        if type(f) is pd.Series:
-            f = f.to_frame().T
-        return OptionChain(f)
+        _f = self.options.loc[self.options['expiration'] == self.expirations[i]]
+        if type(_f) is pd.Series:
+            _f = _f.to_frame().T
+        return OptionChain(_f)
 
     # </editor-fold>
 
@@ -1751,10 +1751,10 @@ class OptionChain:
         _debug(f'Filter for {g} in range {lower}-{upper}', 2)
         if self.options.empty:
             return self
-        f = self.options.loc[(lower <= self.options[g]) & (upper >= self.options[g])]
-        if type(f) is pd.Series:
-            f = f.to_frame().T
-        return OptionChain(f)
+        _f = self.options.loc[(lower <= self.options[g]) & (upper >= self.options[g])]
+        if type(_f) is pd.Series:
+            _f = _f.to_frame().T
+        return OptionChain(_f)
 
     def greek_close_to(self, greek, d):
         _debug(f'Filter for {greek} close to {d}', 2)
@@ -2106,7 +2106,8 @@ class CombinedPosition:
         self.bpr = -1
         self.break_even = -1  # todo multiple break evens possible!
         self.max_profit = -1
-        self.max_profit_point = -1  # smallest underlying price at which max profit occurs todo mult possible (use enum and return list of indices)
+        # smallest underlying price at which max profit occurs todo mult possible (use enum and return list of indices)
+        self.max_profit_point = -1
         self.rom = -1
         self.rom50 = -1
         self.prof_time = -1  # profitmax / dte
@@ -2156,18 +2157,18 @@ class CombinedPosition:
     def __bool__(self):
         return not self.empty()
 
-    def repr(self, t=0, short=True):
-        indent = "\t" * t
+    def repr(self, _t=0, use_short=True):
+        indent = "\t" * _t
         s = ""
         for key, val in self.pos_dict.items():
             if val.quantity != 0:
-                if short:
-                    s += f'{indent}{val.short(t=t + 1)}\n'
+                if use_short:
+                    s += f'{indent}{val.short(_t=_t + 1)}\n'
                 else:
                     s += f'\n' \
                          f'{indent}Position {key}:' \
                          f'\n\n' \
-                         f'{indent}{val.short(t=t + 1)}' \
+                         f'{indent}{val.short(_t=_t + 1)}' \
                          f'\n' \
                          f'{indent}{"." * 300}' \
                          f'\n'
@@ -2224,20 +2225,20 @@ class CombinedPosition:
                f'{indent}           Max profit / DTE: {self.prof_time:.2f} $/d' \
                f'\n' \
                f'{indent}          Half profit / DTE: {self.prof_time50:.2f} $/d' \
-               f'\n\n'
+               f'\n\n'  # todo dte or dtc?
 
-    def detail(self, t=0):
+    def detail(self, _t=0):
         """
         :return: string representation
         """
-        indent = "\t" * t
+        indent = "\t" * _t
         s = ""
         for key, val in self.pos_dict.items():
             if val.quantity != 0:
                 s += f'\n' \
                      f'{indent}Position {key}:' \
                      f'\n\n' \
-                     f'{indent}{val.repr(t=t + 1)}' \
+                     f'{indent}{val.repr(_t=_t + 1)}' \
                      f'\n' \
                      f'{indent}{"." * 300}' \
                      f'\n'
@@ -2385,8 +2386,10 @@ class CombinedPosition:
                 # forecasted extrinsic value of long option when short option expires
                 if lp.asset.opt_type == "p":
                     current_intr = lp.asset.strike - stock.asset.bid
-                if lp.asset.opt_type == "c":
+                elif lp.asset.opt_type == "c":
                     current_intr = stock.asset.ask - lp.asset.strike
+                else:
+                    raise RuntimeError("Option type must be 'c' or 'p'")
 
                 current_intr = max(0, current_intr)
 
@@ -2473,7 +2476,9 @@ class CombinedPosition:
                     to_cover -= min(to_cover, long_q)
 
                     # longs_w_cov_score[0][0] covers
-                    self.cover_short_with(position_to_cover.asset.name, longs_w_cov_score[0][0], -min(to_cover, long_q))
+                    self.cover_short_with(position_to_cover.asset.name,
+                                          longs_w_cov_score[0][0].asset.name,
+                                          -min(to_cover, long_q))
 
                     if longs_w_cov_score[0][0].quantity == 0:
                         longs.remove(longs_w_cov_score[0][0])
@@ -2500,7 +2505,8 @@ class CombinedPosition:
                     longs_w_cov_score = [(long_p, get_long_covering_score(long_p)) for long_p in long_calls]
                     longs_w_cov_score.sort(key=lambda x: x[1])  # sort by covering score
 
-                    while to_cover > 0 and longs_w_cov_score:  # go until short position is fully covered or no longs remain
+                    # go until short position is fully covered or no longs remain
+                    while to_cover > 0 and longs_w_cov_score:
 
                         # adjust long position quantity
                         long_q = longs_w_cov_score[0][0].quantity
@@ -2713,7 +2719,8 @@ class CombinedPosition:
         if len(self.pos_dict.values()) == 1:
             if self.pos_dict[self.underlying].quantity == 0:
                 return list()
-            return self.pos_dict[self.underlying].get_profit_dist(self.stock.ask * 2)
+            # was get_profit_dist and self.stock.ask
+            return self.pos_dict[self.underlying].get_profit_dist_at_exp(self.stock.asset.ask * 2)
 
         # TODO
         """
@@ -2725,8 +2732,8 @@ class CombinedPosition:
 
             highest_strike = max([p.asset.strike for p in list(self.pos_dict.values()) if type(p.asset) is Option])
             profit_dist = [0 for _ in range(int(highest_strike * 100))]
-
-            pos_profits = [np.asarray(pos.get_profit_dist(highest_strike * 2)) for pos in list(self.pos_dict.values())]
+            # was get_profit_dist
+            pos_profits = [np.asarray(pos.get_profit_dist_at_exp(highest_strike * 2)) for pos in list(self.pos_dict.values())]
 
             for profits in pos_profits:
                 profit_dist += profits
@@ -2989,6 +2996,7 @@ class OptionStrategy:
         self.positions: Optional[CombinedPosition] = None
         self.ptp = -1
         self.psl = -1
+        self.exp_gains_on_day = None
         self.prob_of_profit = -1
         self.tp_med_d = -1
         self.tp_avg_d = -1
@@ -2997,7 +3005,8 @@ class OptionStrategy:
         self.implied_pop_at_close = -1
         self.close_pn = -1
         self.close_be = -1
-        self.e_tp_close = -1  # close_pn * tp_percentaga/100 * max_gain
+        self.e_close = None
+        self.e_expiry = None
         self.greek_exposure = None  # set after environment check
         self.close_date = None
 
@@ -3007,7 +3016,7 @@ class OptionStrategy:
         return self.name
 
     def __str__(self):
-        return self.short(t=0)
+        return self.short(_t=0)
 
     def get_test_results_str(self, t=0):
         to_ret = ""
@@ -3022,8 +3031,8 @@ class OptionStrategy:
         if isinstance(parts, dict):
             return ppdict(parts, i=t)
 
-    def short(self, t=0):
-        indent = ("\t" * t)  # todo add greek exposure in pretty
+    def short(self, _t=0):
+        indent = ("\t" * _t)  # todo add greek exposure in pretty
 
         if self.positions is None:
             return f'{indent}Empty {self.name}'
@@ -3056,26 +3065,26 @@ class OptionStrategy:
                f'\n' \
                f'{indent}{"-" * 120}' \
                f'\n' \
-               f'{self.get_test_results_str(t+1)}' \
+               f'{self.get_test_results_str(_t + 1)}' \
                f'\n' \
                f'{indent}{" ." * 60}' \
-               f'{indent}{self.positions.repr(t=t + 1)}' \
+               f'{indent}{self.positions.repr(_t=_t + 1)}' \
                f'{greek_exp if False else ""}' \
                f'{indent}          --- CLOSE ---' \
                f'\n' \
                f'\n' \
                f'{indent}     Close by: {datetime_to_european_str(self.close_date)} ({datetime_to_dte(self.close_date)} days)' \
                f'\n' \
-               f'{indent} MC PoP@close: {self.close_pop * 100: >3.2f} %' \
+               f'{indent} MC PoP@close: {self.close_pop * 100: >5.2f} %' \
                f'\n' \
-               f'{indent} ImpPoP@close: {self.implied_pop_at_close * 100: >3.2f} % WRONG' \
+               f'{indent} ImpPoP@close: {self.implied_pop_at_close * 100: >5.2f} % WRONG' \
                f'\n' \
                f'{indent} P{int(self.tp_percentage)} at close: {self.close_pn * 100: >3.2f} %' \
                f'\n' \
                f'\n' \
-               f'{indent}  BE at close: {self.close_be: >3.2f} $ WRONG' \
+               f'{indent}  BE at close: {self.close_be: >5.2f} $ WRONG' \
                f'\n' \
-               f'{indent}  E(TP)@close: {self.e_tp_close: >3.2f} $' \
+               f'{indent} Expect@close: {self.e_close: >+5.2f} $' \
                f'\n' \
                f'{indent}    Avg to TP: {int(self.tp_avg_d + 0.5)} days\t\t\tMed to TP: {int(self.tp_med_d)} days' \
                f'\n' \
@@ -3083,20 +3092,23 @@ class OptionStrategy:
                f'{indent}          --- EXPIRATION ---' \
                f'\n' \
                f'\n' \
-               f'{indent} MC PoP @ exp: {self.prob_of_profit * 100: >3.2f} %' \
+               f'{indent} MC PoP @ exp: {self.prob_of_profit * 100: >5.2f} %' \
                f'\n' \
-               f'{indent}  Implied PoP: {self.implied_pop * 100: >3.2f} %' \
+               f'{indent}  Implied PoP: {self.implied_pop * 100: >5.2f} %' \
                f'\n' \
-               f'{indent}   P{int(self.tp_percentage)} at exp: {self.ptp * 100: >3.2f} %' \
+               f'{indent}   P{int(self.tp_percentage)} at exp: {self.ptp * 100: >5.2f} %' \
+               f'\n' \
+               f'\n' \
+               f'{indent}   Expect@exp: {self.e_expiry: >+5.2f} $' \
                f'\n' \
                f'{indent}\n    Stop loss: {inner_sl}' \
                f'\n' \
                f'\n' \
                f'{indent}        Hints: {h}'
 
-    def repr(self, t=0):
+    def repr(self, _t=0):
 
-        indent = ("\t" * t)  # todo add greek exp in pretty
+        indent = ("\t" * _t)  # todo add greek exp in pretty
 
         if self.positions is None:
             return f'{indent}Empty {self.name}'
@@ -3111,7 +3123,7 @@ class OptionStrategy:
                f'{indent}{self.name} for {self.positions.underlying}:' \
                f'\n' \
                f'{indent}{"-" * 300}' \
-               f'{indent}{self.positions.repr(t=t + 1)}' \
+               f'{indent}{self.positions.repr(_t=_t + 1)}' \
                f'{indent}{"-" * 300}' \
                f'\n' \
                f'{indent}Greek exposure:' \
@@ -3186,7 +3198,8 @@ class OptionStrategy:
             ("tp_avg_d", self.tp_avg_d),
             ("close_pop", self.close_pop),
             ("close_pn", self.close_pn),
-            ("e_tp_close", self.e_tp_close),
+            ("e_close", self.e_close),
+            ("e_exp", self.e_expiry),
             ("close_date", self.close_date.date()),
             ("stop_loss", "N/A" if self.sl_percentage >= 100 else self.sl_percentage / 100 * self.positions.risk),
         ]
@@ -3352,7 +3365,10 @@ class OptionStrategy:
         self.close_pop = prob_dict.close_pop
         self.close_pn = prob_dict.close_pn
         self.close_be = prob_dict.close_be  # todo wrong??
-        self.e_tp_close = self.tp_percentage / 100 * self.positions.max_profit * self.close_pn
+
+        self.exp_gains_on_day = prob_dict.exp_gains
+        self.e_close = self.exp_gains_on_day[datetime_to_dte(self.close_date) + 1]
+        self.e_expiry = self.exp_gains_on_day[self.positions.dte_until_first_exp() + 1]
 
         # implied by option IVs
 
@@ -4192,7 +4208,8 @@ class CustomStratGenerator:
                             def position_builder_function() -> CombinedPosition:
                                 return comb_pos
 
-                            opt_strat = OptionStrategy(name="Custom Vertical Spread #" + str(strat_name_counter),
+                            opt_strat = OptionStrategy(name=env.ticker.upper() + " Custom Vertical Spread #" +
+                                                            str(strat_name_counter),
                                                        position_builder=position_builder_function,
                                                        env=env,
                                                        tp_perc=tp_perc,
@@ -4266,18 +4283,36 @@ def get_market_recommendations(ticker_f, start_from=None, use_predef=False, _ssc
     tickers = ticker_f()
     #tickers = ["nio"]
     mcs = MonteCarloSimulator(tickers)
+    pos_df = pd.DataFrame()
     if start_from:
         tickers = tickers[tickers.index(start_from):]
-    for t in tickers:
+    for _t in tickers:
         try:
-            propose_strategies(t, constraints, mcs, auto=True,
-                               use_predefined_strats=use_predef,
-                               single_strat_cons=_ssc,
-                               filters=_filters)
+            tmp_df = propose_strategies(_t, constraints, mcs,
+                                        use_predefined_strats=use_predef,
+                                        single_strat_cons=_ssc,
+                                        filters=_filters)
+            pos_df = pd.concat([pos_df, tmp_df])
         except Exception as e:
-            _warn(f'Exception occured when getting strategies for ticker {t}: {e}\n'
+            _warn(f'Exception occured when getting strategies for ticker {_t}: {e}\n'
                   f'{traceback.print_tb(e.__traceback__)}', level=2)
             continue
+
+    if not pos_df.empty:
+        with open(f'StrategySummary-{get_timestamp().split()[0].replace(":", "-")}.json', "w") as file:
+            pos_df.reset_index(inplace=True)
+            pos_df.to_json(file)
+        show(pos_df)
+
+
+def read_and_show_dataframe(path: str = None):
+    if path is None:
+        path = f'StrategySummary-{get_timestamp().split()[0].replace(":", "-")}.json'
+    try:
+        with open(path, "r") as json_file:
+            show(pd.read_json(json_file))
+    except Exception as e:
+        print(f'Exception occurred while trying to read file "{path}": {e}')
 
 
 def binom_test():
@@ -4391,11 +4426,11 @@ def test_greeks():
 
 
 if __name__ == "__main__":
+
+    # TODO why do we only get positive delta trades???
     # TODO pretty representation of option chain, yk
 
     # todo pops differ for 0 dte
-    # todo supply position and get all the stuff from option strat, "watcha think bout dis"
-    # todo expect, sample every 10ct and get prob
     # todo break even on exit day
 
     # todo print warnings to strat sum
@@ -4424,6 +4459,8 @@ if __name__ == "__main__":
     # LONG TERM
     # todo prob forecasts use historic variance, plot uses implied vol ... maybe use this too for forecasts?
 
+    read_and_show_dataframe()
+
     t = "amc"
     ssc = (
         ("risk", "le", 100),
@@ -4446,7 +4483,6 @@ if __name__ == "__main__":
                                            min_vol30=1000,
                                            min_sinle_opt_vol=10),  # used to prefilter chain
                        MonteCarloSimulator(tickers=[t]),
-                       auto=True,
                        use_predefined_strats=False,
                        single_strat_cons=ssc,
                        filters=f,
@@ -4460,4 +4496,5 @@ if __name__ == "__main__":
                                      min_sinle_opt_vol=10))
     #"""
 
-    get_market_recommendations(get_trending_theta_strat_tickers, use_predef=False, _ssc=ssc, _filters=f)
+    get_market_recommendations(get_trending_theta_strat_tickers,
+                               use_predef=False, _ssc=ssc, _filters=f)
