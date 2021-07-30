@@ -34,7 +34,7 @@ ipdb.set_trace()
 
 pritn = print
 
-online = True
+online = False
 force_chain_download = True and online
 force_meta_download = True and online
 
@@ -4469,7 +4469,7 @@ if __name__ == "__main__":
         ("rom50", "ge", 0.2),
         ("rom50", "le", 5),
         ("close_pn", "ge", 0.6),
-        # "e_tp_close": ("ge", 10),
+        #("delta", "le", 0),
     )
     f = [
         [OptionChain.volume, 10],
