@@ -3,6 +3,7 @@ from typing import List, Dict, Tuple
 from random import shuffle, sample, random, choice
 from copy import deepcopy, copy as shallowcopy
 from functools import reduce
+from traceback import print_exc
 
 
 def debug(s=""):
@@ -48,9 +49,9 @@ hand_card_limit = 10
 
 def get_dmg_bonus(attacker, defender):
 
-    group1 = ("Reptile", "Plant", "Dusk")
-    group2 = ("Aqua", "Bird", "Dawn")
-    group3 = ("Mech", "Beast", "Bug")
+    group1 = ("reptile", "plant", "dusk")
+    group2 = ("aqua", "bird", "dawn")
+    group3 = ("mech", "beast", "bug")
 
     if attacker in group1:
         if defender in group1:
@@ -92,7 +93,7 @@ class Card(ABC):
         self.effect = effect
         self.range = r
 
-        self.owner = None
+        self.owner: Axie = None
 
     def __str__(self):
         return f'{type(self).__name__} ({self.attack}/{self.defense})'
@@ -118,27 +119,84 @@ class Card(ABC):
         pass
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):  # returns to_omit, focus (sets)
+        """
+
+        :param match:
+        :param cards_played_this_turn:
+        :param attacker:
+        :param defender:
+        :return: to_omit, to_focus (sets of axies)
+        """
         return set(), set()
 
     def attack_times(self, match, cards_played_this_turn, attacker, defender):
+        """
+
+        :param match:
+        :param cards_played_this_turn:
+        :param attacker:
+        :param defender:
+        :return: number of attacks to perform upon play
+        """
         return 1
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        """
+
+        :param match:
+        :param cards_played_this_turn:
+        :param attacker:
+        :param defender:
+        :return: atk multi (like 0.1 for 10% additional dmg) / dmg reduction (like 0.95 for 5% reduction)
+        """
         return 0
 
     def pre_crit(self, match, cards_played_this_turn, attacker, defender) -> Tuple:  # (crit_multi, crit disable)
-        return 0, False
+        """
+
+        :param match:
+        :param cards_played_this_turn:
+        :param attacker:
+        :param defender:
+        :return: crit multi (1), crit disable (False), add crit prob (0)
+        """
+        return 1, False, 0
 
     def on_crit(self, match, cards_played_this_turn, attacker, defender):  # effects like draw on crit
         return
 
     def on_shield_break(self, match, cards_played_this_turn, attacker, defender):
+        """
+
+        :param match:
+        :param cards_played_this_turn:
+        :param attacker:
+        :param defender:
+        :return: None
+        """
         pass
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount):
+        """
+
+        :param match:
+        :param cards_played_this_turn:
+        :param attacker:
+        :param defender:
+        :param amount:
+        :return: None
+        """
         pass
 
     def on_pre_last_stand(self, match, cards_played_this_turn, attacker, defender):  # block last stand, end last stand
+        """
+
+        :param match:
+        :param cards_played_this_turn:
+        :param attacker:
+        :param defender:
+        :return: block_last_stand, end_last_stand
+        """
         return False, False
 
     def on_last_stand(self, match, cards_played_this_turn, attacker, defender):
@@ -152,22 +210,38 @@ class Axie:
 
     hp_multi = 8.72
 
-    def __init__(self, element: str, mouth: Card, horn: Card, back: Card, tail: Card, eyes: str, ears: str):
+    @staticmethod
+    def rand_elem(rare_types=False):
+        if not rare_types:
+            return sample(("beast", "bird", "bug", "plant", "aqua", "reptile"), 1)[0]
+        return sample(("beast", "bird", "bug", "plant", "aqua", "reptile", "dusk", "dawn", "mech"), 1)[0]
 
-        self.player = None
+    @staticmethod
+    def get_random():
+        from Axie.cards import get_all_card_classes
+        all_cc = get_all_card_classes()
+        return Axie(Axie.rand_elem(), sample(all_cc["mouth"], 1)[0](), sample(all_cc["horn"], 1)[0](), sample(all_cc["back"], 1)[0](), sample(all_cc["tail"], 1)[0]())
 
-        self.element = element
+    def __init__(self, element: str, mouth: Card, horn: Card, back: Card, tail: Card, eyes=None, ears=None):
+
+        self.player: Player = None
+
+        self.element = element if element else self.rand_elem(rare_types=True)
+
         self.mouth = mouth
         mouth.owner = self
+
         self.horn = horn
         horn.owner = self
+
         self.back = back
         back.owner = self
+
         self.tail = tail
         tail.owner = self
 
-        self.eyes = eyes
-        self.ears = ears
+        self.eyes = eyes if eyes else self.rand_elem()
+        self.ears = ears if ears else self.rand_elem()
 
         self.cards = {mouth, horn, back, tail}
 
@@ -180,8 +254,8 @@ class Axie:
             bsk += psk
             bm += pm
 
-        ehp, esp, esk, em = part_to_stats[eyes]
-        php, psp, psk, pm = part_to_stats[ears]
+        ehp, esp, esk, em = part_to_stats[self.eyes]
+        php, psp, psk, pm = part_to_stats[self.ears]
 
         bhp += php + ehp
         bsp += psp + esp
@@ -197,6 +271,7 @@ class Axie:
         self.buffs = dict()  # buff name: stacks, turns remaining
         self.buff_q = dict()
         self.disabilities = dict()  # type to disable: number of turns, e.b. mouth: 1, auqa: 1
+        self.apply_stat_eff_changes = []
 
         self.hp = self.base_hp
         self.speed = self.base_speed
@@ -208,11 +283,14 @@ class Axie:
 
         self.shield = 0
 
-    def short(self):
-        return f'Axie #{str(id(self))[-4:]}'
-
     def __repr__(self):
-        return f'{self.element} Axie #{str(id(self))[-4:]} (H:{self.hp}+{int(self.shield)}/{self.base_hp}, S:{self.speed}) (' \
+        hp_stat = f'(H:{self.hp}+{int(self.shield)}/{self.base_hp}, S:{self.speed})' if self.alive() else f'(dead)'
+        stand_stat = f'L {self.last_stand_ticks}'
+        return f'{self.element.capitalize()} Axie #{str(id(self))[-4:]} [{str(self.player)}] {hp_stat if not self.last_stand else stand_stat}'
+
+    def long(self):
+        hp_stat = f'(H:{self.hp}+{int(self.shield)}/{self.base_hp}, S:{self.speed})' if self.alive() else f'(dead)'
+        return f'{self.element} Axie #{str(id(self))[-4:]} [{str(self.player)}] {hp_stat} (' \
             f'{self.back}, ' \
             f'{self.mouth}, ' \
             f'{self.horn}, ' \
@@ -223,7 +301,8 @@ class Axie:
             self.player.discard_pile += self.player.hand[self]
             del self.player.hand[self]
         except KeyError as e:
-            print(f'Key error: {e}')
+            print(f'Key error in "on_death": {e}')
+            print_exc()
             exit()
 
     def apply_damage(self, battle, cards_to_play, attacker, atk, double_shield_dmg, true_dmg):
@@ -238,15 +317,15 @@ class Axie:
         atk = int(atk)
         self.shield = int(self.shield)
 
+        debug(f'\tATK: {atk}')
+
         # on pre last stand
         for _card in fctp:
-            block, end = _card.on_pre_last_stand(battle, cards_to_play, attacker, self)
-            block_last_stand = block_last_stand or block
-            end_last_stand = end_last_stand or end
+            block_last_stand = block_last_stand or _card.on_pre_last_stand(battle, cards_to_play, attacker, self)
 
         if self.last_stand:
 
-            if block_last_stand:
+            if end_last_stand:
                 self.last_stand = False
                 self.last_stand_ticks = 0
             else:
@@ -259,33 +338,41 @@ class Axie:
                     return
 
         # handle shield
-        elif not true_dmg:
+        elif not true_dmg and self.shield > 0:
 
-            if self.shield > 0:
+            # shield break
+            if (double_shield_dmg and atk * 2 >= self.shield) or atk >= self.shield:
 
-                # shield break
-                if (double_shield_dmg and atk * 2 >= self.shield) or atk >= self.shield:
+                if double_shield_dmg:
+                    atk -= int(self.shield / 2)
+                else:
+                    atk -= self.shield
+                self.shield = 0
 
-                    if double_shield_dmg:
-                        atk -= int(self.shield / 2)
-                    else:
-                        atk -= self.shield
-                    self.shield = 0
+                # on sb
+                for _card in fctp:
+                    _card.on_shield_break(battle, cards_to_play, attacker, self)
 
-                    # on sb
-                    for _card in fctp:
-                        _card.on_shield_break(battle, cards_to_play, attacker, self)
+            else:
+                rem_shield = max(0, self.shield)
+                if double_shield_dmg:
+                    atk -= int(self.shield / 2)
+                else:
+                    atk -= self.shield
+                self.shield = rem_shield
 
         # after shield break
 
         # last stand?
-        if not block_last_stand and atk < self.hp * self.morale / 100:
+        if not block_last_stand and self.hp - atk < 0 and atk - self.hp < self.hp * self.morale / 100:
 
             # on last stand entry
             for _card in fctp:
-                _card.on_last_stand(battle, cards_to_play, attacker, self)
+                end_last_stand = end_last_stand or _card.on_last_stand(battle, cards_to_play, attacker, self)
 
-            self.last_stand = True
+            if not end_last_stand:
+                self.enter_last_stand()
+                return
 
         # lower hp
         else:
@@ -296,8 +383,13 @@ class Axie:
                 self.on_death()
                 return
 
+    def heal(self, amount):
+        if not self.last_stand:
+            self.hp = max(self.base_hp, self.hp+amount)
+
     def enter_last_stand(self):
         self.last_stand = True
+        self.hp = 0
         # TODO check if this is true
         self.last_stand_ticks = int((self.morale - 27) / 11)
         self.shield = 0
@@ -338,13 +430,17 @@ class Axie:
         # tick last stand down
         if self.last_stand:
             self.last_stand_ticks -= 1
+
         # tick poison
         if "poison" in self.buffs.keys():
             stacks, _ = self.buffs["poison"]
             self.hp -= stacks * poison_dmg_per_stack
             if self.hp <= 0:
                 self.on_death()
-        ...
+
+        for change in self.apply_stat_eff_changes:
+            change()
+        self.apply_stat_eff_changes = []
 
     def apply_stat_eff(self, effect, times=1, turns=0, next_turn=False):  # which effects stack? if 2x fear for "next turn" does it stack to 2?
 
@@ -361,6 +457,14 @@ class Axie:
         else:  # stack
             self.buffs.update({effect: (times, self.buffs.get(effect, (0, 0))[1] + turns)})
 
+    def reduce_stat_eff(self, effect, stacks):
+
+        def f():
+            s, rounds = self.buffs.get(effect, (0, 0))
+            self.buffs[effect] = (s-stacks, rounds)
+
+        self.apply_stat_eff_changes.append(f)
+
     def alive(self):
         return self.hp > 0 or self.last_stand
 
@@ -376,6 +480,10 @@ class Player:
 
     start_energy = 3
 
+    @staticmethod
+    def get_random():
+        return Player([Axie.get_random() for _ in range(3)])
+
     def __init__(self, team: List[Axie]):
         assert len(team) == 3
         self.team = team  # team in order front to back line for simplicity
@@ -389,6 +497,9 @@ class Player:
         self.deck_pile = shallowcopy(self.deck)
         self.discard_pile = list()
         self.hand = dict()
+
+    def __repr__(self):
+        return f'Player #{str(id(self))[-4:]}'
 
     def start_turn(self, cards_per_turn, energy_per_turn):
 
@@ -483,7 +594,7 @@ class Player:
 
         debug(f'\tCards to play: {[(str(id(axie))[-4:], card) for axie, card in cards_to_play.items()]}')
         debug(f'\tUsed energy: {used_energy}, Energy remaining: {energy_this_turn-used_energy}')
-        debug(f'\tTeam order: {[a.short() for a in self.team]}')
+        debug(f'\tTeam order: {[a for a in self.team]}')
         return cards_to_play
 
 
@@ -501,6 +612,16 @@ class Match:
     def run_simulation(self):
 
         debug("Starting simulation")
+
+        debug("\nPlayer teams:")
+
+        for axie in self.player1.team:
+            debug(f'{axie.long()}')
+        debug()
+        for axie in self.player2.team:
+            debug(f'{axie.long()}')
+
+        debug()
 
         round_counter = 0
 
@@ -590,7 +711,7 @@ class Match:
                         shield_mult += 0.5
                     """
 
-                    axie.shield = shield_mult * shield_to_give
+                    axie.shield += int(shield_mult * shield_to_give)
 
         for axie in axies_in_attack_order:
 
@@ -611,31 +732,32 @@ class Match:
             def select_attack_target():
 
                 to_omit = set()
-                focus = set()
+                focus = []
 
                 # status effects
                 for xe in opp.team:
                     if xe.alive():
                         for buff, count in xe.buffs.items():
                             if buff == "aroma":
-                                focus.add(xe)
+                                focus.append(xe)
                             if buff == "stench":
                                 to_omit.add(xe)
 
                 # card effect
                 for _c in flat_cards_to_play:
-                    _omit, _focus = _c.on_target_select(self, cards_to_play, axie, None)
+                    _omit, _focus = _c.on_target_select(self, cards_to_play, axie, opp.team[0])
                     to_omit.union(_omit)
-                    focus.union(_focus)
+                    focus.extend(_focus)
 
-                focus = {elem for elem in focus if elem.alive()}
+                focus = [elem for elem in focus if elem.alive()]
                 to_omit = {elem for elem in to_omit if elem.alive()}
 
                 # default select = closest
 
                 # if focus, attack focused
-                if focus and focus - to_omit:
-                    return focus.pop()
+                for _xe in focus:
+                    if _xe not in to_omit:
+                        return _xe
 
                 # attack closest (teams are list in order front to back)
                 for _xe in opp.team:
@@ -647,7 +769,7 @@ class Match:
             # select attack target
             attack_target = select_attack_target()
 
-            debug(f'\nAxie >{axie}<\n\tattacking >{attack_target}<\n\twith {cards_to_play[axie]}\n')
+            debug(f'\nAxie >>{axie}<< attacking >>{attack_target}<< with {cards_to_play[axie]}\n')
 
             def perform_attack(attacking_card, attacker, defender):
                 base_atk = attacking_card.attack
@@ -655,10 +777,12 @@ class Match:
                 skip_dmg_calc = False
                 dmg_reduction = 0  # for this like gecko
 
+                # todo comparison won't work "> 0"
                 if base_atk > 0 and "fear" in attacker.buffs.keys() and attacker.buffs["fear"] > 0:
                     skip_dmg_calc = True
+                    debug(f'Skipping damage calculation because attacker is feared')
 
-                if not skip_dmg_calc and attack_target is not None:
+                if not skip_dmg_calc and attack_target and attack_target.alive():
 
                     # TODO think of this
                     miss = False
@@ -669,9 +793,11 @@ class Match:
                     # element syn card / attacker
                     if attacking_card.element == attacker.element:
                         atk_multi += 0.1
+                        debug(f'Atk multi set to {atk_multi} due to element synergy')
 
                     # element atk / def
                     atk_multi += get_dmg_bonus(attacker.element, defender.element)
+                    debug(f'Atk multi set to {atk_multi} due to rpc system')
 
                     # buff / debuffs atk
                     for buff, (stacks, rounds) in attacker.buffs.items():
@@ -679,14 +805,20 @@ class Match:
 
                             if buff == "attack down":
                                 atk_multi -= 0.2
+                                attacker.reduce_stat_eff("attack down", 1)
+                                debug(f'Atk multi set to {atk_multi} due to attack down')
                             if buff == "stun":
                                 miss = True
                             if buff == "attack up":
                                 atk_multi += 0.2
+                                attacker.reduce_stat_eff("attack up", 1)
+                                debug(f'Atk multi set to {atk_multi} due to attack up')
                             if buff == "morale up":
                                 morale_multi += 0.2
+                                attacker.reduce_stat_eff("morale up", 1)
                             if buff == "morale down":
                                 morale_multi -= 0.2
+                                attacker.reduce_stat_eff("morale down", 1)
 
                             # TODO modification in iteration?
                             # for "next hit" effects
@@ -719,13 +851,18 @@ class Match:
                     # card effects atk
                     for _card in flat_cards_to_play:
                         atk_multi += _card.on_attack(self, cards_to_play, attacker, defender)
+                        #debug(f'Atk multi set to {atk_multi} due to on_attack effect')
 
                     # card effects def (only gecko right now?)
                     for _card in flat_cards_to_play:
                         dmg_reduction = _card.on_attack(self, cards_to_play, attacker, defender)
 
                     # combos
-                    combo_bonus = int(base_atk * atk_multi * attacker.skill / 500)
+                    if len(cards_to_play[attacker]) > 1:
+                        combo_bonus = int(base_atk * atk_multi * attacker.skill / 500)
+                    else:
+                        combo_bonus = 0
+                    debug(f'Combo bonus: {combo_bonus}')
 
                     # calc damage now
                     atk = (base_atk * atk_multi + combo_bonus) * (1 - dmg_reduction)
@@ -746,9 +883,10 @@ class Match:
 
                         # pre crit effects, adjust crit dmg or disable crits
                         for _card in flat_cards_to_play:
-                            _crit_multi, _crit_disable = _card.pre_crit(self, cards_to_play, attacker, defender)
+                            _crit_multi, _crit_disable, _crit_prob = _card.pre_crit(self, cards_to_play, attacker, defender)
                             crit_multi *= _crit_multi
                             crit_disable = crit_disable or _crit_disable
+                            crit_prob += _crit_prob
 
                         # determine crit / normal hit
                         if not crit_disable and random() <= crit_prob:
@@ -759,8 +897,12 @@ class Match:
 
                             atk *= crit_multi
 
+                            debug(f'Critical hit for {atk}')
+
                         # TODO if ded, discard hand for that axie
                         defender.apply_damage(self, cards_to_play, attacker, atk, double_shield_dmg, true_dmg)
+                    else:
+                        debug("Attack missed!")
 
                 # apply card effect
                 attacking_card.on_play(self, cards_to_play)
@@ -776,38 +918,46 @@ class Match:
 
             for card in cards_to_play[axie]:
 
-                attack_times = 1
-                for c in flat_cards_to_play:
-                    t = c.attack_times(self, cards_to_play, axie, attack_target)
-                    if t:
-                        attack_times += (t-1)
+                if attack_target:
 
-                for _ in range(attack_times):
-                    if card.part_name == "Dark swoop":
-                        continue
-                    perform_attack(card, axie, attack_target)
-                    debug(f'\tAttack target after attack: {attack_target}')
-                    debug(f'\t     Attacker after attack: {axie}\n')
+                    attack_times = 1
+                    for c in flat_cards_to_play:
+                        t = c.attack_times(self, cards_to_play, axie, attack_target)
+                        if t:
+                            attack_times += (t-1)
 
-    def determine_order(self, cards_to_play) -> List[Axie]:  # TODO wrong, account for health etc to resolve conflicts
+                    for _ in range(attack_times):
+
+                        if card.attack == 0 or attack_target.alive():
+                            perform_attack(card, axie, attack_target)
+
+                        debug(f'\tAttack target after attack: {attack_target}')
+                        debug(f'\t     Attacker after attack: {axie}\n')
+
+    def get_axies_in_attack_order(self, cards_to_play) -> List[Axie]:
 
         if not cards_to_play:
             return []
 
-        init_speeds = [(axie, axie.speed) for axie in cards_to_play.keys()]
-        final_speeds = {axie: 0 for axie in cards_to_play.keys()}
+        return self.determine_order(cards_to_play.keys())
+
+    def determine_order(self, axies):
+
+        init_speeds = [(axie, axie.speed) for axie in axies]
+        final_speeds = {axie: 0 for axie in axies}
 
         for axie, speed in init_speeds:
 
             speed_mult = 1
 
             # status effects
-            for buff, count in axie.buffs.items():
+            for buff, (count, turns) in axie.buffs.items():
                 if buff == "speed up":
                     speed_mult += 0.2 * count
                 if buff == "speed down":
                     speed_mult -= 0.2 * count
 
-            final_speeds[axie] = speed * speed_mult
+            # this breaks ties by hp & morale
+            final_speeds[axie] = (speed * speed_mult, axie.hp, axie.morale)
 
-        return sorted(list(cards_to_play.keys()), key=lambda axie: final_speeds[axie], reverse=True)
+        return sorted(axies, key=lambda axie: final_speeds[axie], reverse=True)
