@@ -220,7 +220,8 @@ class Axie:
     def get_random():
         from Axie.cards import get_all_card_classes
         all_cc = get_all_card_classes()
-        return Axie(Axie.rand_elem(), sample(all_cc["mouth"], 1)[0](), sample(all_cc["horn"], 1)[0](), sample(all_cc["back"], 1)[0](), sample(all_cc["tail"], 1)[0]())
+        return Axie(Axie.rand_elem(), sample(all_cc["mouth"], 1)[0](), sample(all_cc["horn"], 1)[0](),
+                    sample(all_cc["back"], 1)[0](), sample(all_cc["tail"], 1)[0]())
 
     def __init__(self, element: str, mouth: Card, horn: Card, back: Card, tail: Card, eyes=None, ears=None):
 
@@ -616,6 +617,8 @@ class Match:
         self.player2 = player2
         self.round = 1
 
+        self.game_status = None
+
     def run_simulation(self):
 
         debug("Starting simulation")
@@ -661,6 +664,10 @@ class Match:
         cards_p1.update(cards_p2)
 
         self.fight(cards_p1)
+
+        return self.check_win()
+
+    def check_win(self):
 
         if not self.player1.team_alive():
             if not self.player2.team_alive():
@@ -722,7 +729,7 @@ class Match:
 
         for axie in axies_in_attack_order:
 
-            if not cards_to_play[axie] or not axie.alive():
+            if not cards_to_play[axie] or not axie.alive() or self.game_status in range(3):
                 continue
 
             owner = None
@@ -879,6 +886,10 @@ class Match:
                     # crit prob = moral / 457
                     # miss prob = 2.5%
 
+                    # attacks on dead never hit
+                    if not attack_target.alive():
+                        miss = True
+
                     # determine miss / hit
                     if not miss and random() > miss_prob:
 
@@ -911,6 +922,15 @@ class Match:
                     else:
                         debug("Attack missed!")
 
+                        # tick actions
+                        for xe in axies_in_attack_order:
+                            if xe.alive():
+                                xe.action_tick()
+
+                        self.game_status = self.check_win()
+
+                        return False
+
                 # apply card effect
                 attacking_card.on_play(self, cards_to_play)
 
@@ -919,13 +939,15 @@ class Match:
                     if xe.alive():
                         xe.action_tick()
 
-                return
+                self.game_status = self.check_win()
+
+                return True
 
             # ------------------------------------------------------
 
             for card in cards_to_play[axie]:
 
-                if attack_target:
+                if self.game_status not in range(3) and attack_target:
 
                     attack_times = 1
                     for c in flat_cards_to_play:
@@ -933,10 +955,14 @@ class Match:
                         if t:
                             attack_times += (t-1)
 
+                    missed = False
                     for _ in range(attack_times):
 
-                        if card.attack == 0 or attack_target.alive():
-                            perform_attack(card, axie, attack_target)
+                        if missed:
+                            continue
+
+                        if self.game_status not in range(3) and (attack_target.alive() or card.attack == 0):
+                            missed = not perform_attack(card, axie, attack_target)
 
                         debug(f'\tAttack target after attack: {attack_target}')
                         debug(f'\t     Attacker after attack: {axie}\n')
