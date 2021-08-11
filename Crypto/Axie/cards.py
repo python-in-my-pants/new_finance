@@ -234,7 +234,7 @@ class TailSlap(Card):
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
         if self.owner is attacker and len(cards_played_this_turn[attacker]) >= 2:
-            self.owner.player.energy += 1
+            self.owner.player.gain_energy(1)
         return 0
 
 

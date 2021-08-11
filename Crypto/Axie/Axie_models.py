@@ -300,6 +300,7 @@ class Axie:
         try:
             self.player.discard_pile += self.player.hand[self]
             del self.player.hand[self]
+            debug("Hand discarded sucessfully!")
         except KeyError as e:
             print(f'Key error in "on_death": {e}')
             print_exc()
@@ -423,6 +424,9 @@ class Axie:
                 del self.disabilities[dis]
             else:
                 self.disabilities[dis] = self.disabilities[dis] - 1
+
+        # reset shield
+        self.shield = 0
 
     def action_tick(self):
 
@@ -555,6 +559,9 @@ class Player:
         for k, v in self.hand.items():
             debug(f'{k}: {v}')
         debug()
+
+    def gain_energy(self, amount):
+        self.energy = max(min(10, self.energy+amount), 0)
 
     def select_cards(self) -> Dict:
         return self.random_select()
