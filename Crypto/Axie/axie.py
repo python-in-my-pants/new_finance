@@ -104,7 +104,7 @@ def download_axie_cards():
 
 def get_axie_df():
     r = read_axie_cards_df()
-    if not r.empty:
+    if r is not None and not r.empty:
         _f = r.astype(str)
         return _f.astype({"Cost": int, "Attack": int, "Defense": int})
     else:
@@ -162,6 +162,8 @@ stop_words = get_stop_words() + \
 
 
 f = get_axie_df()
+
+print(f)
 
 
 eff_words = word_count(' '.join([w.lower().replace(".", "") for w in f.Effect.values]))

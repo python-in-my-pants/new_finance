@@ -7,7 +7,8 @@ from traceback import print_exc
 
 
 def debug(s=""):
-    print(s)
+    #print(s)
+    pass
 
 
 def flatten(t):
@@ -20,7 +21,7 @@ def flatten(t):
     return out
 
 
-type_to_stats = { # hp, speed, skill, morale
+type_to_stats = {  # hp, speed, skill, morale
     "beast": (31, 35, 31, 43),
     "aqua": (39, 39, 35, 27),
     "plant": (43, 31, 31, 35),
@@ -43,7 +44,6 @@ part_to_stats = { # hp, speed, skill, morale
 
 poison_dmg_per_stack = 2
 miss_prob = 0.025
-last_stand_tick_hp = 30  # this is wrong, it's always inf
 hand_card_limit = 10
 
 
@@ -83,10 +83,10 @@ def get_dmg_bonus(attacker, defender):
 class Card(ABC):
 
     def __init__(self, card_name, body_part, part_name, element, cost, r, attack, defense, effect):
-        self.card_name = card_name
-        self.body_part = body_part
-        self.part_name = part_name
-        self.element = element
+        self.card_name = card_name.title()
+        self.body_part = body_part.lower()
+        self.part_name = part_name.title()
+        self.element = element.lower()
         self.cost = cost
         self.attack = attack
         self.defense = defense
@@ -105,6 +105,13 @@ class Card(ABC):
         return f'{self.card_name} - {self.part_name} ({self.body_part}, {self.range})\n\t' \
             f'{self.element} - Cost: {self.cost}, Attack: {self.attack}, Defense: {self.defense}\n\t' \
             f'Effect: {self.effect}'
+
+    def on_determine_order(self):
+        """
+
+        :return: always_first?
+        """
+        return False
 
     def on_play(self, match, cards_played_this_turn):
         pass
@@ -153,7 +160,6 @@ class Card(ABC):
 
     def pre_crit(self, match, cards_played_this_turn, attacker, defender) -> Tuple:  # (crit_multi, crit disable)
         """
-
         :param match:
         :param cards_played_this_turn:
         :param attacker:
@@ -227,7 +233,7 @@ class Axie:
 
         self.player: Player = None
 
-        self.element = element if element else self.rand_elem(rare_types=True)
+        self.element = element.lower() if element else self.rand_elem(rare_types=True)
 
         self.mouth = mouth
         mouth.owner = self
@@ -269,6 +275,26 @@ class Axie:
         self.base_speed = bsp
         self.base_skill = bsk
 
+        self.buffs = dict()  # buff name: stacks, turns remaining
+        self.buff_q = dict()
+        self.disabilities = dict()  # type to disable: number of turns, e.b. mouth: 1, auqa: 1
+        self.disabilities_q = dict()
+        self.apply_stat_eff_changes = []
+
+        self.hp = self.base_hp
+        self.speed = self.base_speed
+        self.skill = self.base_skill
+        self.morale = self.base_morale
+
+        self.last_stand = False
+        self.last_stand_ticks = 1 if self.base_morale <= 38 else 2 if self.base_morale <= 49 else 3
+
+        self.shield = 0
+
+    def disable(self, part, turns):
+        self.disabilities_q.update({part: max(self.disabilities_q.get(part, 0), turns)})
+
+    def reset(self):
         self.buffs = dict()  # buff name: stacks, turns remaining
         self.buff_q = dict()
         self.disabilities = dict()  # type to disable: number of turns, e.b. mouth: 1, auqa: 1
@@ -379,15 +405,15 @@ class Axie:
         # lower hp
         else:
 
-            self.hp -= atk
+            self.change_hp(-atk)
 
             if self.hp <= 0:
                 self.on_death()
                 return
 
-    def heal(self, amount):
+    def change_hp(self, amount):
         if not self.last_stand:
-            self.hp = max(self.base_hp, self.hp+amount)
+            self.hp = max(min(self.base_hp, self.hp+amount), 0)
 
     def enter_last_stand(self):
         self.last_stand = True
@@ -413,11 +439,16 @@ class Axie:
         for key in to_del:
             del self.buffs[key]
 
-        # apply q
+        # apply buff q
         for buff, (times, turns) in self.buff_q.items():
             ti, tu = self.buffs.get(buff, (0, 0))
             self.buffs[buff] = (ti + times, tu + turns)
         self.buff_q = dict()
+
+        # apply disablity q
+        for dis, turns in self.disabilities_q.items():
+            self.disabilities.update({dis: max(self.disabilities.get(dis), turns)})
+        self.disabilities_q = dict()
 
         # tick disabilities (body parts, certain element cards)
         for dis in self.disabilities.keys():
@@ -439,7 +470,7 @@ class Axie:
         # tick poison
         if "poison" in self.buffs.keys():
             stacks, _ = self.buffs["poison"]
-            self.hp -= stacks * poison_dmg_per_stack
+            self.change_hp(-stacks * poison_dmg_per_stack)
             if self.hp <= 0:
                 self.on_death()
 
@@ -473,13 +504,6 @@ class Axie:
     def alive(self):
         return self.hp > 0 or self.last_stand
 
-    def reset(self):
-        self.hp = self.base_hp
-        self.morale = self.base_morale
-        self.skill = self.base_skill
-        self.morale = self.base_morale
-        self.buffs = dict()
-
 
 class Player:
 
@@ -487,7 +511,7 @@ class Player:
 
     @staticmethod
     def get_random():
-        return Player([Axie.get_random() for _ in range(3)])
+        return Player(sorted([Axie.get_random() for _ in range(3)], key=lambda xe: xe.base_hp, reverse=True))
 
     def __init__(self, team: List[Axie]):
         assert len(team) == 3
@@ -503,8 +527,25 @@ class Player:
         self.discard_pile = list()
         self.hand = dict()
 
+    def reset(self):
+        for axie in self.team:
+            axie.reset()
+        self.energy = self.start_energy
+        self.deck_pile = shallowcopy(self.deck)
+        self.discard_pile = list()
+        self.hand = dict()
+
+    def get_deck_string(self):
+        s = ""
+        for axie in self.team:
+            s += axie.long() + "\n"
+        return s
+
     def __repr__(self):
         return f'Player #{str(id(self))[-4:]}'
+
+    def __hash__(self):
+        return id(self)
 
     def start_turn(self, cards_per_turn, energy_per_turn):
 
@@ -513,7 +554,7 @@ class Player:
                 axie.turn_tick()
 
         self.draw_cards(cards_per_turn)
-        self.energy += energy_per_turn
+        self.gain_energy(energy_per_turn)
 
     def team_alive(self):
         for axie in self.team:
@@ -565,9 +606,9 @@ class Player:
         self.energy = max(min(10, self.energy+amount), 0)
 
     def select_cards(self) -> Dict:
-        return self.random_select()
+        return self.random_select(True)
 
-    def random_select(self) -> Dict:
+    def random_select(self, greedy=False) -> Dict:
 
         hand_cards = flatten(list(self.hand.values()))
         hand_card_number = len(hand_cards)
@@ -579,8 +620,7 @@ class Player:
         cards_to_play = {axie: [] for axie in self.hand.keys()}
         cards_per_axie = {axie: 0 for axie in self.hand.keys()}
 
-        pick_threshold = 1.0 / hand_card_number
-        pick_threshold = 0.5
+        pick_threshold = 0.5 if not greedy else 0
 
         while c < hand_card_number and used_energy < energy_this_turn:
 
@@ -598,12 +638,15 @@ class Player:
 
             c += 1
 
-        self.energy -= used_energy
+        self.gain_energy(-used_energy)
 
         debug(f'\tCards to play: {[(str(id(axie))[-4:], card) for axie, card in cards_to_play.items()]}')
         debug(f'\tUsed energy: {used_energy}, Energy remaining: {energy_this_turn-used_energy}')
         debug(f'\tTeam order: {[a for a in self.team]}')
         return cards_to_play
+
+    def get_relative_team_hp(self):
+        return sum([float(axie.hp) / float(axie.base_hp) for axie in self.team]) / len(self.team)
 
 
 class Match:
@@ -615,13 +658,15 @@ class Match:
     def __init__(self, player1, player2):
         self.player1 = player1
         self.player2 = player2
-        self.round = 1
-
-        self.game_status = None
+        self.round = 0
 
     def run_simulation(self):
 
         debug("Starting simulation")
+
+        self.player1.reset()
+        self.player2.reset()
+        self.round = 1
 
         debug("\nPlayer teams:")
 
@@ -635,13 +680,28 @@ class Match:
 
         round_counter = 0
 
-        while self.run_round(round_counter) not in (0, 1, 2):
-            debug(f'\nRound {round_counter+1} finished\n')
+        while self.game_running():
+            self.run_round(round_counter)
+            debug(f'\nRound {round_counter + 1} finished\n')
             round_counter += 1
 
-    def run_round(self, round_counter) -> int:  # 1 = player 1 wins, 2 = player 2 wins, 0 = draw
+        return self.get_result()
+
+    def game_running(self):
+        return self.player1.team_alive() and self.player2.team_alive()
+
+    def run_round(self, round_counter):
 
         # tODO if round > sth apply auto dmg to axies
+        if round_counter >= 10:
+            for axie in self.player1.team + self.player2.team:
+                if axie.alive():
+                    axie.change_hp(-(round_counter-10) * 50)
+                    if axie.hp <= 0:
+                        axie.on_death()
+
+            if not self.game_running():
+                return
 
         # start round, reset shield to 0, remove buffs/debuffs \ poison, draw cards
         debug("Player 1 hand:")
@@ -665,24 +725,24 @@ class Match:
 
         self.fight(cards_p1)
 
-        return self.check_win()
+    def get_result(self):
 
-    def check_win(self):
+        """
+        :return: [-1, 1]; 1 if player 1 wins with full team hp, -1 if player 2 wins with full team hp;
+                 2 if game is not over yet
+        """
 
-        if not self.player1.team_alive():
-            if not self.player2.team_alive():
-                debug(f'Game ended in a draw')
-                return 0
-            else:
-                debug("Player 2 wins")
-                return 2
-        if not self.player2.team_alive():
-            if not self.player1.team_alive():
-                debug("Game ended in a draw")
-                return 0
-            else:
-                debug("Player 1 wins")
-                return 1
+        if not (self.player1.team_alive() or self.player2.team_alive()):
+            debug("Game ended in a draw")
+            return 0  # draw
+
+        if self.player1.team_alive():
+            debug("Player 1 wins!")
+            return self.player1.get_relative_team_hp()
+
+        if self.player2.team_alive():
+            debug("Player 2 wins!")
+            return -self.player2.get_relative_team_hp()
 
     def fight(self, cards_to_play):
 
@@ -690,7 +750,7 @@ class Match:
         # (debuffs, buffs, e.g. aroma etc, effects e.g. always attack first)
 
         flat_cards_to_play = flatten(list(cards_to_play.values()))
-        axies_in_attack_order = self.determine_order(cards_to_play)
+        axies_in_attack_order = self.get_axies_in_attack_order(cards_to_play)
 
         if not axies_in_attack_order:
             return
@@ -698,6 +758,9 @@ class Match:
         debug(f'\nAxies in attack order:')
         for x in axies_in_attack_order:
             debug(f'\t{x}: {cards_to_play[x]}')
+
+        for card in flat_cards_to_play:
+            card.on_start_turn(self, cards_to_play)
 
         # apply shield
         for axie in axies_in_attack_order:
@@ -729,7 +792,7 @@ class Match:
 
         for axie in axies_in_attack_order:
 
-            if not cards_to_play[axie] or not axie.alive() or self.game_status in range(3):
+            if not cards_to_play[axie] or not axie.alive() or not self.game_running():
                 continue
 
             owner = None
@@ -855,7 +918,7 @@ class Match:
                     # on chain effects
                     chain_cards = []
                     for xe in owner.team:
-                        if xe.alive():
+                        if xe.alive() and xe is not axie:
                             other_cards = cards_to_play.get(xe, None)
                             if other_cards and attacking_card.element in [c.element for c in other_cards]:
                                 chain_cards += cards_to_play[xe]
@@ -865,7 +928,7 @@ class Match:
                     # card effects atk
                     for _card in flat_cards_to_play:
                         atk_multi += _card.on_attack(self, cards_to_play, attacker, defender)
-                        #debug(f'Atk multi set to {atk_multi} due to on_attack effect')
+                        debug(f'Atk multi set to {atk_multi} due to {_card.part_name} effect')
 
                     # card effects def (only gecko right now?)
                     for _card in flat_cards_to_play:
@@ -927,8 +990,6 @@ class Match:
                             if xe.alive():
                                 xe.action_tick()
 
-                        self.game_status = self.check_win()
-
                         return False
 
                 # apply card effect
@@ -939,15 +1000,13 @@ class Match:
                     if xe.alive():
                         xe.action_tick()
 
-                self.game_status = self.check_win()
-
                 return True
 
             # ------------------------------------------------------
 
             for card in cards_to_play[axie]:
 
-                if self.game_status not in range(3) and attack_target:
+                if self.game_running() and attack_target:
 
                     attack_times = 1
                     for c in flat_cards_to_play:
@@ -961,7 +1020,7 @@ class Match:
                         if missed:
                             continue
 
-                        if self.game_status not in range(3) and (attack_target.alive() or card.attack == 0):
+                        if self.game_running() and (attack_target.alive() or card.attack == 0):
                             missed = not perform_attack(card, axie, attack_target)
 
                         debug(f'\tAttack target after attack: {attack_target}')
@@ -972,9 +1031,7 @@ class Match:
         if not cards_to_play:
             return []
 
-        return self.determine_order(cards_to_play.keys())
-
-    def determine_order(self, axies):
+        axies = cards_to_play.keys()
 
         init_speeds = [(axie, axie.speed) for axie in axies]
         final_speeds = {axie: 0 for axie in axies}
@@ -993,4 +1050,13 @@ class Match:
             # this breaks ties by hp & morale
             final_speeds[axie] = (speed * speed_mult, axie.hp, axie.morale)
 
-        return sorted(axies, key=lambda axie: final_speeds[axie], reverse=True)
+        ranked_axies = sorted(axies, key=lambda axie: final_speeds[axie], reverse=True)
+
+        always_first = []
+        for axie in axies:
+            for card in cards_to_play[axie]:
+                if card.on_determine_order():
+                    always_first.append(axie)
+                    ranked_axies.remove(axie)
+
+        return always_first + ranked_axies

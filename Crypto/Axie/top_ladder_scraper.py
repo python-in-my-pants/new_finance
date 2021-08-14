@@ -268,7 +268,7 @@ def get_decks_with_composition(comp):
     return rel_decks
 
 
-def get_part_distribution(axies, i=17):
+def get_part_distribution(axies, i=0):
     """
     Reptile:
         Mouth:
