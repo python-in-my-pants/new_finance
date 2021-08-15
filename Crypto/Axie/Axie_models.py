@@ -92,6 +92,7 @@ class Card(ABC):
         self.defense = defense
         self.effect = effect
         self.range = r
+        self.triggered = False
 
         self.owner: Axie = None
 
@@ -182,9 +183,10 @@ class Card(ABC):
         """
         pass
 
-    def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount):
+    def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
         """
 
+        :param atk_card:
         :param match:
         :param cards_played_this_turn:
         :param attacker:
@@ -291,8 +293,11 @@ class Axie:
 
         self.shield = 0
 
-    def disable(self, part, turns):
-        self.disabilities_q.update({part: max(self.disabilities_q.get(part, 0), turns)})
+    def disable(self, part, turns, asap=False):
+        if asap:
+            self.disabilities.update({part: max(self.disabilities_q.get(part, 0), turns)})
+        else:
+            self.disabilities_q.update({part: max(self.disabilities_q.get(part, 0), turns)})
 
     def reset(self):
         self.buffs = dict()  # buff name: stacks, turns remaining
@@ -333,7 +338,7 @@ class Axie:
             print_exc()
             exit()
 
-    def apply_damage(self, battle, cards_to_play, attacker, atk, double_shield_dmg, true_dmg):
+    def apply_damage(self, battle, cards_to_play, attacker, atk, double_shield_dmg, true_dmg, atk_card):
 
         if not self.alive():
             return
@@ -341,15 +346,25 @@ class Axie:
         block_last_stand = False
         end_last_stand = False
         fctp = flatten(list(cards_to_play.values()))
+        sleep = False
 
         atk = int(atk)
         self.shield = int(self.shield)
+        inflicted_dmg = 0
 
         debug(f'\tATK: {atk}')
+
+        if "sleep" in self.buffs.keys() and self.buffs["sleep"] > 0:
+            sleep = True
+            self.reduce_stat_eff("sleep", "all")
 
         # on pre last stand
         for _card in fctp:
             block_last_stand = block_last_stand or _card.on_pre_last_stand(battle, cards_to_play, attacker, self)
+
+        def on_dmg_infl(x):
+            for c in fctp:
+                c.on_damage_inflicted(battle, cards_to_play, attacker, self, x, atk_card)
 
         if self.last_stand:
 
@@ -359,6 +374,8 @@ class Axie:
             else:
 
                 self.last_stand_ticks -= 1
+                inflicted_dmg += atk
+                on_dmg_infl(inflicted_dmg)
 
                 if self.last_stand_ticks <= 0:
                     self.last_stand = False  # ded
@@ -366,28 +383,34 @@ class Axie:
                     return
 
         # handle shield
-        elif not true_dmg and self.shield > 0:
+        elif not true_dmg and not sleep and self.shield > 0:
 
             # shield break
             if (double_shield_dmg and atk * 2 >= self.shield) or atk >= self.shield:
 
                 if double_shield_dmg:
                     atk -= int(self.shield / 2)
+                    inflicted_dmg += int(self.shield / 2)
                 else:
                     atk -= self.shield
+                    inflicted_dmg += self.shield
                 self.shield = 0
 
                 # on sb
                 for _card in fctp:
                     _card.on_shield_break(battle, cards_to_play, attacker, self)
 
-            else:
+            else:  # shield not breaking
+
                 rem_shield = max(0, self.shield)
                 if double_shield_dmg:
                     atk -= int(self.shield / 2)
+                    inflicted_dmg += int(self.shield / 2)
                 else:
                     atk -= self.shield
+                    inflicted_dmg += int(self.shield / 2)
                 self.shield = rem_shield
+                on_dmg_infl(inflicted_dmg)
 
         # after shield break
 
@@ -398,6 +421,9 @@ class Axie:
             for _card in fctp:
                 end_last_stand = end_last_stand or _card.on_last_stand(battle, cards_to_play, attacker, self)
 
+            inflicted_dmg += self.hp
+            on_dmg_infl(inflicted_dmg)
+
             if not end_last_stand:
                 self.enter_last_stand()
                 return
@@ -405,14 +431,20 @@ class Axie:
         # lower hp
         else:
 
+            inflicted_dmg += min(atk, self.hp)
             self.change_hp(-atk)
+            on_dmg_infl(inflicted_dmg)
 
             if self.hp <= 0:
                 self.on_death()
                 return
 
+        # TODO call on_dmg_inflicted
+
     def change_hp(self, amount):
         if not self.last_stand:
+            if "heal" in self.disabilities.keys():
+                amount = min(amount, 0)
             self.hp = max(min(self.base_hp, self.hp+amount), 0)
 
     def enter_last_stand(self):
@@ -424,20 +456,7 @@ class Axie:
 
     def turn_tick(self):  # TODO each status effect should have a life time that ticks away
 
-        to_del = []
-        # tick status effects (buffs, debuffs)
-        for stat_eff, (times, turns) in self.buffs.items():
-
-            if stat_eff == "attack down" or stat_eff == "attack up":
-                continue
-
-            if turns - 1 < 0:
-                to_del.append(stat_eff)
-            else:
-                self.buffs[stat_eff] = (times, turns-1)
-
-        for key in to_del:
-            del self.buffs[key]
+        # --- apply queue ---
 
         # apply buff q
         for buff, (times, turns) in self.buff_q.items():
@@ -450,12 +469,33 @@ class Axie:
             self.disabilities.update({dis: max(self.disabilities.get(dis), turns)})
         self.disabilities_q = dict()
 
-        # tick disabilities (body parts, certain element cards)
-        for dis in self.disabilities.keys():
-            if self.disabilities[dis] - 1 < 0:
-                del self.disabilities[dis]
+        # --- tick ---
+
+        to_del = []
+        # tick status effects (buffs, debuffs)
+        for stat_eff, (times, turns) in self.buffs.items():
+
+            if stat_eff == "attack down" or stat_eff == "attack up":
+                continue
+
+            if turns - 1 < 0 or times == 0:
+                to_del.append(stat_eff)
             else:
-                self.disabilities[dis] = self.disabilities[dis] - 1
+                self.buffs[stat_eff] = (times, turns-1)
+
+        for key in to_del:
+            del self.buffs[key]
+
+        # tick disabilities (body parts, certain element cards)
+        to_del = []
+        for dis, turns in self.disabilities.items():
+            if turns - 1 < 0:
+                to_del.append(dis)
+            else:
+                self.disabilities[dis] = turns - 1
+
+        for entry in to_del:
+            del self.disabilities[entry]
 
         # reset shield
         self.shield = 0
@@ -478,25 +518,41 @@ class Axie:
             change()
         self.apply_stat_eff_changes = []
 
-    def apply_stat_eff(self, effect, times=1, turns=0, next_turn=False):  # which effects stack? if 2x fear for "next turn" does it stack to 2?
+    def apply_stat_eff(self, effect, times=1, turns=0):  # which effects stack? if 2x fear for "next turn" does it stack to 2?
 
         """
-        :param effect:
-        :param times:
-        :param turns:
-        :param next_turn: true if effect is applied next n turns
+        TODO this is inaccurate because new stacks falsely extend the duration of old stacks
+        :param effect: effect name, e.g. aroma
+        :param times: stacks to apply, e.g. poison
+        :param turns: 0 = until next turn, 1 = for next turn, 2 = for next 2 turns
         :return:
         """
 
-        if next_turn:
-            self.buffs.update({effect: (times, max(self.buffs.get(effect, (0, 0)[1]), 1))})
-        else:  # stack
-            self.buffs.update({effect: (times, self.buffs.get(effect, (0, 0))[1] + turns)})
+        stacking = {"attack up", "attack down", "morale up", "morale down", "speed up", "speed down", "poison"}
+        only_for_next_round = {"jinx"}
+
+        # effects that don't decay over time
+        if effect in ("poison", "stun", "attack up", "attack down", "fear", "fragile", "lethal", "sleep"):
+            turns = 10000
+
+        _times, _turns = self.buffs.get(effect, (0, 0))
+        if effect in only_for_next_round:
+            self.buff_q.update({effect: (1, turns)})
+            return
+        if effect not in stacking:
+            self.buffs.update({effect: (1, max(_turns, turns))})
+            return
+        else:
+            self.buffs.update({effect: (times + _times, max(_turns, turns))})
+            return
 
     def reduce_stat_eff(self, effect, stacks):
 
         def f():
+            nonlocal stacks
             s, rounds = self.buffs.get(effect, (0, 0))
+            if stacks == "all":
+                stacks = s
             self.buffs[effect] = (s-stacks, rounds)
 
         self.apply_stat_eff_changes.append(f)
@@ -659,6 +715,7 @@ class Match:
         self.player1 = player1
         self.player2 = player2
         self.round = 0
+        self.chain_cards = []  # cards chained with currently resolving card
 
     def run_simulation(self):
 
@@ -855,8 +912,9 @@ class Match:
                 dmg_reduction = 0  # for this like gecko
 
                 # todo comparison won't work "> 0"
-                if base_atk > 0 and "fear" in attacker.buffs.keys() and attacker.buffs["fear"] > 0:
+                if base_atk > 0 and "fear" in attacker.buffs.keys() and attacker.buffs["fear"][0] > 0:
                     skip_dmg_calc = True
+                    attacker.reduce_stat_eff("fear", 1)
                     debug(f'Skipping damage calculation because attacker is feared')
 
                 if not skip_dmg_calc and attack_target and attack_target.alive():
@@ -886,44 +944,44 @@ class Match:
                                 debug(f'Atk multi set to {atk_multi} due to attack down')
                             if buff == "stun":
                                 miss = True
+                                attacker.reduce_stat_eff("stun", "all")
+                                debug("Attack missed due to stun")
                             if buff == "attack up":
                                 atk_multi += 0.2
                                 attacker.reduce_stat_eff("attack up", 1)
                                 debug(f'Atk multi set to {atk_multi} due to attack up')
+
                             if buff == "morale up":
                                 morale_multi += 0.2
-                                attacker.reduce_stat_eff("morale up", 1)
+                                # attacker.reduce_stat_eff("morale up", 1)
                             if buff == "morale down":
                                 morale_multi -= 0.2
-                                attacker.reduce_stat_eff("morale down", 1)
-
-                            # TODO modification in iteration?
-                            # for "next hit" effects
-                            attacker.buffs[buff] = (s - 1, rounds)
+                                # attacker.reduce_stat_eff("morale down", 1)
 
                     # buff / debuff def
                     for buff, (stacks, rounds) in defender.buffs.items():
                         for s in range(stacks):
+
                             if buff == "fragile":
                                 double_shield_dmg = True
+                                defender.reduce_stat_eff("fragile", "all")
                             if buff == "stun":
                                 true_dmg = True
+                                defender.reduce_stat_eff("stun", "all")
 
-                            defender.buffs[buff] = (s-1, rounds)
-
-                    # on combo effects
-                    if len(cards_to_play[attacker]) > 1:
-                        attacking_card.on_combo(self, cards_to_play, cards_to_play[attacker])
+                    self.comb_cards = cards_to_play[attacker]
 
                     # on chain effects
-                    chain_cards = []
+                    self.chain_cards = []
                     for xe in owner.team:
                         if xe.alive() and xe is not axie:
                             other_cards = cards_to_play.get(xe, None)
                             if other_cards and attacking_card.element in [c.element for c in other_cards]:
-                                chain_cards += cards_to_play[xe]
+                                self.chain_cards += cards_to_play[xe]
+                    """
                     if len(chain_cards) > 0:
                         attacking_card.on_chain(self, cards_to_play, chain_cards)
+                    """
 
                     # card effects atk
                     for _card in flat_cards_to_play:
@@ -962,6 +1020,10 @@ class Match:
                         crit_multi = 2
                         crit_disable = False
 
+                        if "lethal" in defender.buffs.keys() and defender.buffs["lethal"][0] > 0:
+                            crit_prob = 1
+                            defender.reduce_stat_eff("lethal", "all")
+
                         # pre crit effects, adjust crit dmg or disable crits
                         for _card in flat_cards_to_play:
                             _crit_multi, _crit_disable, _crit_prob = _card.pre_crit(self, cards_to_play, attacker, defender)
@@ -980,8 +1042,7 @@ class Match:
 
                             debug(f'Critical hit for {atk}')
 
-                        # TODO if ded, discard hand for that axie
-                        defender.apply_damage(self, cards_to_play, attacker, atk, double_shield_dmg, true_dmg)
+                        defender.apply_damage(self, cards_to_play, attacker, atk, double_shield_dmg, true_dmg, card)
                     else:
                         debug("Attack missed!")
 
@@ -1025,6 +1086,10 @@ class Match:
 
                         debug(f'\tAttack target after attack: {attack_target}')
                         debug(f'\t     Attacker after attack: {axie}\n')
+
+            # reset "once per round" effects
+            for card in flat_cards_to_play:
+                card.triggered = False
 
     def get_axies_in_attack_order(self, cards_to_play) -> List[Axie]:
 

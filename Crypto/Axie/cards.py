@@ -13,7 +13,7 @@ card_dataframe = pd.read_json("axie_card_data_auto.json")
 def attributes_from_df(card_name):
 
     row = card_dataframe.loc[card_dataframe["Card name"] == card_name]
-    values = [row["Card name"], row["Part"], row["Part name"], row["Type"], row["Cost"], row["Range"], row["Attack"], \
+    values = [row["Card name"], row["Part"], row["Part name"], row["Type"], row["Cost"], row["Range"], row["Attack"],
               row["Defense"], row["Effect"]]
     return [x.iloc[0] for x in values]
 
@@ -77,7 +77,7 @@ class AquaVitality(Card):
         super().__init__("Aqua vitality", "back", "Anemone", "aqua", 1, "melee", 80, 40,
                          "Successful attacks restore 50 HP for each Anemone part this Axie posseses.")
 
-    def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount):
+    def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
         if attacker is self.owner:
             anemone_parts = len([part for part in self.owner.cards if "Anemone" in part.part_name])
             self.owner.change_hp(anemone_parts * 50)
@@ -90,7 +90,7 @@ class AquaPonics(Card):
         super().__init__("Aquaponics", "horn", "Anemone", "aqua", 1, "ranged", 80, 40,
                          "Successful attacks restore 50 HP for each Anemone part this Axie posseses.")
 
-    def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount):
+    def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
         if attacker is self.owner:
             anemone_parts = len([part for part in self.owner.cards if "Anemone" in part.part_name])
             self.owner.change_hp(anemone_parts * 50)
@@ -193,7 +193,7 @@ class SwallowCatfish(Card):
         super().__init__("Swallow", "mouth", "Catfish", "aqua", 1, "melee", 80, 30,
                          "Heal this Axie by the damage inflicted with this card.")
 
-    def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount):
+    def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
         if self.owner is attacker:
             self.owner.change_hp(amount)
 
@@ -359,7 +359,7 @@ class WoodmanPower(Card):
         super().__init__("Woodman power", "back", "Timber", "beast", 1, "melee", 50, 100,
                          "Add Shield equal to the damage this cards deals to Plant targets.")
 
-    def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount):
+    def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
         if self.owner is attacker:
             if defender.element == "plant":
                 self.owner.shield += amount
@@ -438,7 +438,7 @@ class Acrobatic(Card):
 
     def __init__(self):
         super().__init__("Acrobatic", "horn", "Arco", "beast", 1, "melee", 100, 50,
-                         "Apply Speed + to this Axie for 2 rounds when attacked.")
+                         "Apply Speed+ to this Axie for 2 rounds when attacked.")
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
         if self.owner is defender:
@@ -526,7 +526,9 @@ class RampantHowl(Card):
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
         if self.owner is attacker and self.owner.last_stand:
-            self.owner.apply_stat_eff("morale up", 1, 2)
+            for teammember in self.owner.player.team:
+                if teammember.alive():
+                    teammember.apply_stat_eff("morale up", 1, 2)
         return 0
 
 
@@ -571,7 +573,6 @@ class GebrilJump(Card):
 
 
 # </editor-fold>
-
 
 # <editor-fold desc="Birds">
 
@@ -688,7 +689,12 @@ class SmartShot(Card):
         super().__init__("Smart shot", "horn", "Wing horn", "bird", 0, "ranged", 50, 10,
                          'Skip the closest target if there are 2 or more enemies remaining.')
 
-    ...
+    def on_target_select(self, match, cards_played_this_turn, attacker, defender):
+        if self.owner is attacker:
+            living_opp = [axie for axie in defender.player.team if axie.alive()]
+            if len(living_opp) >= 2:
+                return set(living_opp[1]), list()
+        return set(), list()
 
 
 class FeatherLunge(Card):
@@ -696,8 +702,111 @@ class FeatherLunge(Card):
     def __init__(self):
         super().__init__(*attributes_from_df("Feather lunge"))
 
-    ...
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            chain_cards = []
+            for xe in self.owner.player.team:
+                if xe.alive() and xe is not self:
+                    other_cards = cards_played_this_turn.get(xe, None)
+                    if other_cards and self.element in [c.element for c in other_cards]:
+                        chain_cards += cards_played_this_turn[xe]
 
+            if "Lunge" in [card.part_name for card in chain_cards]:
+                return 0.2
+        return 0
+
+
+class SoothingSong(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Soothing song"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            defender.apply_stat_eff("sleep", 1)
+        return 0
+
+
+class PeaceTreaty(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Peace treaty"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            defender.apply_stat_eff("attack down", 1)
+        return 0
+
+
+class Insectivore(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Insectivore"))
+
+    def on_target_select(self, match, cards_played_this_turn, attacker, defender):
+        if self.owner is attacker:
+            bugs = [axie for axie in defender.player.team if axie.element == "bug" and axie.alive()]
+            if self.owner.hp <= self.owner.base_hp * 0.5 and bugs:
+                return set(), [bugs[0]]
+        return set(), list()
+
+
+class EarlyBird(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Early bird"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            if self is match.get_axies_in_attack_order(cards_played_this_turn)[0]:
+                return 0.2
+        return 0
+
+
+class SunderArmor(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Sunder armor"))
+
+    def on_start_turn(self, match, cards_played_this_turn):
+        n = 0
+        for elem, (stacks, rounds) in self.owner.buffs.items():
+            if elem in debuffs:
+                n += stacks
+        self.owner.shield += self.defense * 0.2 * n
+
+
+class PuffySmack(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Puffy smack"))
+
+    def on_target_select(self, match, cards_played_this_turn, attacker, defender):
+        if self.owner is attacker:
+            return {axie for axie in defender.player.team if axie.alive() and axie.last_stand}, list()
+        return set(), list()
+
+
+class CoolBreeze(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Cool breeze"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            defender.apply_stat_eff("chill", 1, 2)
+        return 0
+
+
+class AllOutShot(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("All-out shot"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            self.owner.change_hp(-self.owner.base_hp * 0.3)
+        return 0
 
 
 class Eggbomb(Card):
@@ -708,7 +817,7 @@ class Eggbomb(Card):
                          "Apply aroma on this axie until next round")
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender):
-        self.owner.apply_stat_eff("aroma", turns=0)  # should disappear at start of next turn
+        self.owner.apply_stat_eff("aroma", 1, turns=0)  # should disappear at start of next turn
         return 0
 
 
@@ -769,6 +878,333 @@ class RiskyFeather(Card):
     def on_attack(self, match, cards_played_this_turn, attacker, defender):
         self.owner.apply_stat_eff("attack down", times=2, turns=10000)  # goes away on attack
         return 0
+
+# </editor-fold>
+
+# <editor-fold desc="Bugs">
+
+
+class StickyGoo(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Sticky goo"))
+
+    def on_shield_break(self, match, cards_played_this_turn, attacker, defender):
+        if self.owner is defender and not self.triggered:
+            attacker.apply_stat_eff("stun", 1)
+            self.triggered = True
+
+
+class BarbStrike(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Barb strike"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker and len(match.chain_cards) > 1:
+            defender.apply_stat_eff("poison", 1)
+        return 0
+
+
+class BugNoise(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Bug noise"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            defender.apply_stat_eff("attack down", 1)
+        return 0
+
+
+class BugSplat(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Bug splat"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker and defender.element == "bug":
+            return 0.5
+        return 0
+
+
+class ScarabCurse(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Scarab curse"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            defender.disable("heal", 0, asap=True)
+        return 0
+
+
+class BuzzingWind(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Buzzing wind"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            defender.apply_stat_eff("fragile", 1, 0)
+        return 0
+
+
+class MysticRush(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Mystic rush"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            defender.apply_stat_eff("speed down", 1, 2)
+        return 0
+
+
+class BugSignal(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Bug signal"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker and "Bug Signal" in [card.card_name for card in cards_played_this_turn[self]]:
+            if defender.player.energy >= 1:
+                defender.player.gain_energy(-1)
+                self.owner.player.gain_energy(1)
+        return 0
+
+
+class GrubSurprise(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Grub surprise"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            if defender.shield:
+                defender.apply_stat_eff("fear", 1)
+        return 0
+
+
+class DullGrip(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Dull grip"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            if defender.shield:
+                return 0.3
+        return 0
+
+
+class ThirdGlance(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Third glance"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            defender.player.random_discard(1)
+        return 0
+
+
+class Disguise(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Disguise"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker and len([card for card in cards_played_this_turn[self] if card.element == "plant"]) > 0:
+            self.owner.player.gain_energy(1)
+        return 0
+
+
+class BloodTaste(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("BloodTaste"))
+
+    def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
+        if self.owner is attacker:
+            self.owner.change_hp(amount)
+
+
+class SunderClaw(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Sunder claw"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            defender.player.random_discard(1)
+        return 0
+
+
+class TerrorChomp(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Terror chomp"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            if len(match.chain_cards) > 0:
+                defender.apply_stat_eff("fear", 1, 2)
+        return 0
+
+
+class MiteBite(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("MiteBite"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker and len(cards_played_this_turn[self]) > 1:
+            return 1
+        return 0
+
+
+class ChemicalWarfare(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Chemical warfare"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            defender.apply_stat_eff("stench", 1, 1)
+        return 0
+
+
+class TwinNeedle(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Twin needle"))
+
+    def attack_times(self, match, cards_played_this_turn, attacker, defender):
+        if len(cards_played_this_turn[self]) > 1:
+            return 2
+        return 1
+
+
+class AnestheticBait(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Anesthetic bait"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is defender:
+            if attacker.element in ("aqua", "bird"):
+                attacker.apply_stat_eff("stun", 1)
+        return 0
+
+
+class NumbingLecretion(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Numbing lecretion"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker:
+            defender.disable("melee", 1)
+        return 0
+
+
+class GrubExplode(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Grub explode"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker and self.owner.last_stand:
+            self.owner.last_stand = False
+            return 1
+        return 0
+
+
+class AllergicReacion(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Allergic reaction"))
+
+    def on_attack(self, match, cards_played_this_turn, attacker, defender) -> float:
+        if self.owner is attacker and set(debuffs).intersection(set(defender.buffs.keys())):
+            return 0.3
+        return 0
+
+# </editor-fold>
+
+# <editor-fold desc="Plants">
+
+
+class TurnipRocket(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Turnip rocker"))
+
+    def on_target_select(self, match, cards_played_this_turn, attacker, defender):
+        if self.owner is attacker:
+            if len(cards_played_this_turn[self]) >= 3:
+                return set(), [card for card in defender.player.team if card.element == "bird"]
+        return set(), list()
+
+
+class ShroomsGrace(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Shrooms grace"))
+
+    def on_play(self, match, cards_played_this_turn):
+        self.owner.change_hp(120)
+
+
+class CleanseScent(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Cleanse scent"))
+
+    def on_play(self, match, cards_played_this_turn):
+        for buff, (_, _) in self.owner.buffs.items():
+            if buff in debuffs:
+                self.owner.reduce_stat_eff(buff, "all")
+
+
+class AquaStock(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Aqua stock"))
+
+    def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
+        if self.owner is defender:
+            if atk_card.element == "aqua":
+                self.owner.player.gain_energy(1)
+
+
+class Refresh(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Refresh"))
+
+    def on_play(self, match, cards_played_this_turn):
+        i = self.owner.player.team.index(self)
+        if i == 1:
+            front_mate = self.owner.player.team[0]
+        if i == 2:
+            front_mate = self.owner.player.team[1]
+        else:
+            front_mate = None
+
+        if front_mate:
+            if front_mate.alive() and not front_mate.last_stand:
+
+                for buff, (_, _) in front_mate.buffs.items():
+                    if buff in debuffs:
+                        front_mate.reduce_stat_eff(buff, "all")
+
+
+class OctoberTreat(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df(...))
 
 # </editor-fold>
 

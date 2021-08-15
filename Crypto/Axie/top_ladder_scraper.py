@@ -7,6 +7,7 @@ from selenium.webdriver.firefox.options import Options
 import pandas as pd
 from pandasgui import show
 
+
 pd.set_option("display.max_rows", None, "display.max_columns", None)
 pd.set_option('display.width', 1000)
 pd.set_option('display.max_colwidth', 500)
@@ -212,7 +213,7 @@ def show_as_df(deck_list):
             pickle.dump(df, file)
 
     print(df)
-    show(df)
+    # show(df)
 
 
 def simple_hist(word_list):
@@ -253,6 +254,8 @@ def super_simple_hist(elements):
     s = sum(d.values())
     for k, v in d.items():
         print(f'{" "*(mlen-len(str(k)))}{k}: [{"+"*v}{" "*(s-v)}]')
+
+    return [t[0] for t in sorted(d.items(), key=lambda item: item[1], reverse=True)]
 
 
 def get_deck_combos():
@@ -330,18 +333,54 @@ def get_best_card_combs(axies):
     r = dict(sorted(combs.items(), key=lambda item: item[1], reverse=True))
     mlen = max([len(str(s)) for s in r.keys()])
     for k, v in r.items():
-        print(f'{k}: {" "*(mlen-len(str(k)))}{v}')
+        if v > 8:
+            print(f'{k}: {" "*(mlen-len(str(k)))}{v}')
     return r
 
 
+def show_deck_type_graph(edge_list, h="Headline", edge_limit=8):
+
+    """
+
+    :param edge_limit:
+    :param h:
+    :param edge_list: (node1, node2, edge_weight)
+    :return: None
+    """
+
+    import networkx as nx
+    from pyvis.network import Network
+
+    # type_to_color = {"Aquatic": "blue", "Plant": "green", "Bird": "#ff66ff", "Reptile": "#b366ff", "Beast": "yellow"}
+
+    G = nx.Graph()
+    # todo use relative frequency
+    G.add_edges_from([(str(e1), str(e2), {"weight": v}) for (e1, e2), v in edge_list.items() if v > edge_limit])
+
+    net = Network(notebook=True, width="100%", height="100%", heading=h)
+    net.from_nx(G)
+
+    net.show("example.html")
+
+    import webbrowser
+    webbrowser.open("example.html", new=2)
+    time.sleep(3)
+
+
+show_as_df(decks)
 super_simple_hist(get_single_class_usage())
-super_simple_hist(get_deck_combos())
+best_deck_combs = super_simple_hist(get_deck_combos())
 
-best_comb = get_deck_combos()[0]
-print("\nBest comb:", best_comb, "\n")
-get_part_distribution(flatten(get_decks_with_composition(best_comb)))
+print("\nBest comb:", best_deck_combs[0], "\n")
+get_part_distribution(flatten(get_decks_with_composition(best_deck_combs[0])))
 
-get_best_card_combs(flatten(get_decks_with_composition(best_comb)))
+best_card_combs = get_best_card_combs(flatten(get_decks_with_composition(best_deck_combs[0])))
+best_card_combs2 = get_best_card_combs(flatten(get_decks_with_composition(best_deck_combs[1])))
+best_card_combs3 = get_best_card_combs(flatten(get_decks_with_composition(best_deck_combs[2])))
+
+show_deck_type_graph(best_card_combs, h=', '.join([t.title() for t in best_deck_combs[0]]))
+show_deck_type_graph(best_card_combs2, h=', '.join([t.title() for t in best_deck_combs[1]]))
+show_deck_type_graph(best_card_combs3, h=', '.join([t.title() for t in best_deck_combs[2]]))
 
 
 try:
