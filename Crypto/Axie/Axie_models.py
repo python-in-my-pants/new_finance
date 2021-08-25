@@ -8,9 +8,13 @@ import logging
 from Option_utility import get_timestamp
 
 """
-last stand entry not working
+last stand entry not working?
 cards on_attack / on_dmg inflicted is messy
-make reptile cards
+
+fear - not attack the whole turn (not miss but attack itself is not possible, support cards work tho)
+sleep - whole round, shields are ignored
+pumpkin should draw in last stand too
+
 """
 
 
@@ -654,7 +658,8 @@ class Axie:
             change()
         self.apply_stat_eff_changes = []
 
-    def apply_stat_eff(self, effect, times=1, turns=0):  # which effects stack? if 2x fear for "next turn" does it stack to 2?
+    def apply_stat_eff(self, effect, times=1, turns=0):
+        # which effects stack? if 2x fear for "next turn" does it stack to 2?
 
         """
         TODO this is inaccurate because new stacks falsely extend the duration of old stacks
@@ -668,7 +673,7 @@ class Axie:
         only_for_next_round = {"jinx"}
 
         # effects that don't decay over time
-        if effect in ("poison", "stun", "attack up", "attack down", "fear", "fragile", "lethal", "sleep"):
+        if effect in ("poison", "stun", "attack up", "attack down", "fragile", "lethal"):
             turns = 10000
 
         _times, _turns = self.buffs.get(effect, (0, 0))

@@ -542,7 +542,7 @@ class BalloonPop(Card):
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
         if self.owner is attacker:
             defender.apply_stat_eff("fear", 1)
-        elif self.owner is defender:
+        if self.owner is defender:
             self.owner.apply_stat_eff("fear", 0)  # TODO check this works as intended
         return 0
 
