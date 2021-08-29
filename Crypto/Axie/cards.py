@@ -6,10 +6,149 @@ from Axie.Axie_models import Card, flatten
 debuffs = ["aroma", "stench", "attack down", "morale down", "speed down",
            "fear", "chill", "stun", "poison", "jinx", "fragile", "lethal", "sleep"]
 
-
 # TODO check if on_attack calls should not acutally be on_dmg_inflicted calls !!!
 
-card_dataframe = pd.read_json("axie_card_data_auto.json")
+card_dataframe = pd.read_json("axie_card_data_w_tags.json")
+
+
+def set_tags_in_df():
+
+    effects = [row["Effect"].lower() for _, row in card_dataframe.iterrows()]
+    tags = [list() for _ in range(len(effects))]
+    elems = ("beast", "bird", "bug", "plant", "aqua", "reptile", "dusk", "dawn", "mech")
+
+    for i, eff in enumerate(effects):
+
+        if "apply" in eff:
+            if "+" in eff:
+                tags[i].append("buff")
+            elif "-" in eff:
+                if "speed" in eff:
+                    tags[i].append("speed-")
+                if "attack" in eff:
+                    tags[i].append("attack-")
+                if "morale" in eff:
+                    tags[i].append("morale-")
+            else:
+                tags[i].append("debuff")
+
+        if "energy" in eff:
+            tags[i].append("energy")
+
+        if "steal" in eff or "destroy" in eff:
+            tags[i].append("energy control")
+
+        if "energy" in eff and ("gain" in eff or "generate" in eff):
+            tags[i].append("energy gain")
+
+        if ("remove" in eff and "buff" in eff) or ("transfer" in eff and "debuff" in eff):
+            tags[i].append("cleanse")
+
+        if "heal" in eff or "restore" in eff:
+            tags[i].append("heal")
+
+        for debuff in debuffs:
+            if debuff in eff:
+                tags[i].append(debuff)
+
+        if "attacker" in eff or "attacked" in eff or "struck" in eff or "hit" in eff:
+            tags[i].append("on:defense")
+
+        if "combo" in eff:
+            tags[i].append("combo")
+
+        if "chain" in eff:
+            tags[i].append("chain")
+
+        if "draw" in eff:
+            tags[i].append("draw")
+        if "target injured" in eff or \
+            "target a" in eff or \
+            "prioritize" in eff or \
+            "skip" in eff or \
+            "stench" in eff or \
+            ("target" in eff and "enem" in eff):
+            tags[i].append("backdoor")
+
+        for elem in elems:
+            if elem in eff:
+                tags[i].append(elem)
+
+        if "last stand" in eff:
+            tags[i].append("last stand")
+
+        if "deal" in eff and "damage" in eff and "%" in eff:
+            tags[i].append("increase damage")
+
+        if "shield breaks" in eff:
+            tags[i].append("on:shield break")
+
+        if ("add " in eff or "recover" in eff) and "shield" in eff:
+            tags[i].append("increase shield")
+
+        if "hp is below" in eff:
+            tags[i].append("on:low hp")
+
+        if "crit" in eff or "morale+" in eff:
+            tags[i].append("crit")
+
+        if "disable" in eff:
+            tags[i].append("disable")
+
+        if "twice" in eff or ("strike" in eff and "times" in eff):
+            tags[i].append("multi attack")
+
+        if "cannot do additional damage" in eff or "reduce damage" in eff:
+            tags[i].append("reduce damage")
+
+        if "attacks first" in eff or "attacks at the beginning" in eff:
+            tags[i].append("on:first attack")
+
+    with open("tags.txt", "w") as file:
+        tag_list = sorted(list(set(flatten(tags))))
+        for line in tag_list:
+            file.write(f'{line}\n')
+        file.close()
+
+    for i, _ in card_dataframe.iterrows():
+        card_dataframe.at[i, "Tags"] = tags[i]
+
+    for _, row in card_dataframe.iterrows():
+        print(row["Card name"], row["Effect"], row["Tags"])
+
+    card_dataframe.to_json("axie_card_data_w_tags.json")
+
+
+def part_name_to_card_name(part_name, part):
+
+    new_name_dict = {
+        "Maki": "Fish Snack",
+        "Origami": "Cupid",
+        "Kawaii": "Cute Bunny",
+        "Dango": "Tiny Turtle",
+        "Hamaya": "Risky Beast",
+        "Hasagi": "Ronin",
+        "Yakitori": "Shiitake",
+        "Geisha": "Piranha",
+        "Kendama": "Imp",
+        "Umaibo": "Pocky",
+        "Yorishiro": "Beech",
+        "Omatsuri": "Granma's Fan",
+        "Koinobori": "Koi"
+    }
+
+    if new_name_dict.get(part_name, None):
+        part_name = new_name_dict[part_name]
+
+    row = card_dataframe.loc[(card_dataframe["Part name"] == part_name) &
+                             (card_dataframe["Part"] == part.title())]
+    try:
+        return row["Card name"].iloc[0]
+    except IndexError as e:
+        from traceback import print_exc
+        print(e)
+        print_exc()
+        exit()
 
 
 def ctitle(s):
@@ -27,6 +166,10 @@ def attributes_from_df(card_name):
         print(e, card_name)
         print_exc()
         exit(-1)
+
+
+def instantiate(s):
+    return exec(f'{s}()')
 
 
 # <editor-fold desc="Aqua">
@@ -61,7 +204,7 @@ class SwiftEscape(Card):
 
     def on_defense(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
         if defender is self.owner:
-            self.owner.apply_stat_eff("speed up", 1)
+            self.owner.apply_stat_eff("speed up", (3, 1))
         return 0
 
 
@@ -89,14 +232,14 @@ class AquaVitality(Card):
             self.owner.change_hp(anemone_parts * 50)
 
 
-class AquaPonics(Card):
+class Aquaponics(Card):
 
     def __init__(self):
         # card_name, body_part, part_name, element, cost, r, attack, defense, effect
         super().__init__(*attributes_from_df("Aquaponics"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if attacker is self.owner:
+        if atk_card is self:
             anemone_parts = len([part for part in self.owner.cards if "Anemone" in part.part_name])
             self.owner.change_hp(anemone_parts * 50)
 
@@ -108,7 +251,7 @@ class SpinalTap(Card):
         super().__init__(*attributes_from_df("Spinal tap"))
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
-        if attacker is self.owner:
+        if attacker is self.owner and self is cards_played_this_turn[self.owner][0]:
             if len(cards_played_this_turn[self.owner]) >= 3:
                 to_focus = [axie for axie in defender.player.team if axie.alive() and not cards_played_this_turn[axie]]
                 return set(), to_focus
@@ -127,7 +270,7 @@ class ShellJab(Card):
         return 0
 
 
-class DeppSeaGore(Card):
+class DeepSeaGore(Card):
 
     def __init__(self):
         # card_name, body_part, part_name, element, cost, r, attack, defense, effect
@@ -182,14 +325,14 @@ class AngryLam(Card):
         return 0
 
 
-class SwallowCatfish(Card):
+class Swallow(Card):
 
     def __init__(self):
         # card_name, body_part, part_name, element, cost, r, attack, defense, effect
         super().__init__(*attributes_from_df("Swallow"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker:
+        if atk_card is self:
             self.owner.change_hp(amount)
 
 
@@ -212,7 +355,7 @@ class CrimsonWater(Card):
         super().__init__(*attributes_from_df("Crimson water"))
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
-        if self.owner is attacker and self.owner.hp <= self.owner.base_hp * 0.5:
+        if self.owner is attacker and self is cards_played_this_turn[self.owner][0] and self.owner.hp <= self.owner.base_hp * 0.5:
             to_focus = [axie for axie in defender.player.team if axie.hp < axie.base_hp]
             return set(), to_focus
         return set(), list()
@@ -226,7 +369,7 @@ class UpstreamSwim(Card):
 
     def on_combo(self, match, cards_played_this_turn, combo_cards):
         if len([card for card in combo_cards if card.element == "aqua"]) >= 2:
-            self.owner.apply_stat_eff("speed up", 1, 2)
+            self.owner.apply_stat_eff("speed up", (3, 1))
 
 
 class TailSlap(Card):
@@ -236,7 +379,7 @@ class TailSlap(Card):
         super().__init__(*attributes_from_df("Tail slap"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker and atk_card is self and len(cards_played_this_turn[attacker]) >= 2:
+        if atk_card is self and len(cards_played_this_turn[attacker]) >= 2:
             self.owner.player.gain_energy(1)
 
 
@@ -247,8 +390,8 @@ class BlackBubble(Card):
         super().__init__(*attributes_from_df("Black bubble"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker:
-            defender.apply_stat_eff("jinx", 1, 2)
+        if atk_card is self:
+            defender.apply_stat_eff("jinx", 2)
         return 0
 
 
@@ -258,8 +401,8 @@ class WaterSphere(Card):
         super().__init__(*attributes_from_df("Water sphere"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker:
-            defender.apply_stat_eff("chill", 1, 2)
+        if atk_card is self:
+            defender.apply_stat_eff("chill", 2)
         return 0
 
 
@@ -280,7 +423,7 @@ class ChitinJump(Card):
         super().__init__(*attributes_from_df("Chitin jump"))
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
-        if self.owner is attacker:
+        if self.owner is attacker and self is cards_played_this_turn[self.owner][0]:
             return set(), [axie for axie in defender.player.team[::-1] if axie.alive()]
         return set(), list()
 
@@ -340,7 +483,7 @@ class WoodmanPower(Card):
         super().__init__(*attributes_from_df("Woodman power"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker:
+        if atk_card is self:
             if defender.element == "plant":
                 self.owner.shield += amount
 
@@ -411,9 +554,8 @@ class Acrobatic(Card):
     def __init__(self):
         super().__init__(*attributes_from_df("Acrobatic"))
 
-    def on_defense(self, match, cards_played_this_turn, attacker, defender, card) -> float:
-        if self.owner is defender:
-            self.owner.apply_stat_eff("speed up", 1, turns=2)
+    def on_attack(self, match, cards_played_this_turn, attacker, defender, card) -> float:
+        self.owner.apply_stat_eff("speed up", (3, 1))
         return 0
 
 
@@ -434,7 +576,7 @@ class PiercingSound(Card):
         super().__init__(*attributes_from_df("Piercing sound"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker:
+        if atk_card is self:
             defender.player.gain_energy(-1)
         return 0
 
@@ -445,9 +587,9 @@ class DeathMark(Card):
         super().__init__(*attributes_from_df("Death mark"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker:
+        if atk_card is self:
             if self.owner.hp < self.owner.base_hp * 0.3:
-                defender.apply_stat_eff("lethal", 1)
+                defender.apply_stat_eff("lethal", True)
 
 
 class SelfRally(Card):
@@ -456,7 +598,7 @@ class SelfRally(Card):
         super().__init__(*attributes_from_df("Self rally"))
 
     def on_play(self, match, cards_played_this_turn):
-        self.owner.apply_stat_eff("morale up", 1, 2)
+        self.owner.apply_stat_eff("morale up", (3, 2))
 
 
 class LunaAbsorb(Card):
@@ -474,7 +616,7 @@ class NightSteal(Card):
         super().__init__(*attributes_from_df("Night steal"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker and len(cards_played_this_turn[self.owner]) > 1:
+        if atk_card is self and len(cards_played_this_turn[self.owner]) > 1:
             if defender.player.energy >= 1:
                 defender.player.gain_energy(-1)
                 self.owner.player.gain_energy(1)
@@ -490,7 +632,7 @@ class RampantHowl(Card):
         if self.owner is attacker and self.owner.last_stand:
             for teammember in self.owner.player.team:
                 if teammember.alive():
-                    teammember.apply_stat_eff("morale up", 1, 2)
+                    teammember.apply_stat_eff("morale up", (3, 1))
         return 0
 
 
@@ -523,7 +665,7 @@ class GerbilJump(Card):
         super().__init__(*attributes_from_df("Gerbil jump"))
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
-        if self.owner is attacker:
+        if self.owner is attacker and self is cards_played_this_turn[self.owner][0]:
             tmp = [axie for axie in defender.player.team if axie.alive()]
             if len(tmp) >= 2:
                 return set(), [tmp[1]]
@@ -540,10 +682,12 @@ class BalloonPop(Card):
         super().__init__(*attributes_from_df("Balloon pop"))
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
-        if self.owner is attacker:
-            defender.apply_stat_eff("fear", 1)
+        defender.apply_stat_eff("fear", 2)
+        return 0
+
+    def on_defense(self, match, cards_played_this_turn, attacker, defender, card) -> float:
         if self.owner is defender:
-            self.owner.apply_stat_eff("fear", 0)  # TODO check this works as intended
+            self.owner.apply_stat_eff("fear", 1)  # TODO check this works as intended
         return 0
 
 
@@ -554,7 +698,7 @@ class HeartBreak(Card):
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
         if self.owner is attacker:
-            defender.apply_stat_eff("morale down", 1, 2)
+            defender.apply_stat_eff("morale down", (2, 2))
         return 0
 
 
@@ -564,8 +708,7 @@ class IllOmened(Card):
         super().__init__(*attributes_from_df("Ill-omened"))
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
-        if self.owner is attacker:
-            defender.apply_stat_eff("jinx", 1, 2)
+        defender.apply_stat_eff("jinx", 2)
         return 0
 
 
@@ -575,7 +718,7 @@ class PatientHunter(Card):
         super().__init__(*attributes_from_df("Patient hunter"))
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
-        if self.owner is attacker and self.owner.hp < self.owner.base_hp * 0.5:
+        if self is cards_played_this_turn[self.owner][0] and self.owner is attacker and self.owner.hp < self.owner.base_hp * 0.5:
             return set(), [axie for axie in defender.player.team if axie.alive() and axie.element == "aqua"]
         return set(), list()
 
@@ -586,7 +729,7 @@ class TripleThreat(Card):
         super().__init__(*attributes_from_df("Triple threat"))
 
     def attack_times(self, match, cards_played_this_turn, attacker, defender):
-        if self.owner is attacker and flatten(self.owner.buffs.values()):
+        if self.owner is attacker and self.owner.buffs.is_debuffed():
             return 2
         return 1
 
@@ -619,7 +762,7 @@ class Headshot(Card):
         super().__init__(*attributes_from_df("Headshot"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker:
+        if atk_card is self:
             defender.disable("horn", 1)
 
 
@@ -629,7 +772,7 @@ class SmartShot(Card):
         super().__init__(*attributes_from_df("Smart shot"))
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
-        if self.owner is attacker:
+        if self is cards_played_this_turn[self.owner][0] and self.owner is attacker:
             living_opp = [axie for axie in defender.player.team if axie.alive()]
             if len(living_opp) >= 2:
                 return {living_opp[0]}, list()
@@ -684,7 +827,7 @@ class Insectivore(Card):
         super().__init__(*attributes_from_df("Insectivore"))
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
-        if self.owner is attacker:
+        if self is cards_played_this_turn[self.owner][0] and self.owner is attacker:
             bugs = [axie for axie in defender.player.team if axie.element == "bug" and axie.alive()]
             if self.owner.hp <= self.owner.base_hp * 0.5 and bugs:
                 return set(), [bugs[0]]
@@ -709,11 +852,7 @@ class SunderArmor(Card):
         super().__init__(*attributes_from_df("Sunder armor"))
 
     def on_start_turn(self, match, cards_played_this_turn):
-        n = 0
-        for elem, (stacks, rounds) in self.owner.buffs.items():
-            if elem in debuffs:
-                n += stacks
-        self.owner.shield += self.defense * 0.2 * n
+        self.owner.shield += self.defense * 0.2 * self.owner.buffs.count_debuffs()
 
 
 class PuffySmack(Card):
@@ -722,7 +861,7 @@ class PuffySmack(Card):
         super().__init__(*attributes_from_df("Puffy smack"))
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
-        if self.owner is attacker:
+        if self is cards_played_this_turn[self.owner][0] and self.owner is attacker:
             return {axie for axie in defender.player.team if axie.alive() and axie.last_stand}, list()
         return set(), list()
 
@@ -734,7 +873,7 @@ class CoolBreeze(Card):
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
         if self.owner is attacker:
-            defender.apply_stat_eff("chill", 1, 2)
+            defender.apply_stat_eff("chill", 2)
         return 0
 
 
@@ -744,7 +883,7 @@ class AllOutShot(Card):
         super().__init__(*attributes_from_df("All-out shot"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker and not self.triggered:
+        if atk_card is self and not self.triggered:
             self.owner.change_hp(-int(0.3*self.owner.base_hp))
 
 
@@ -756,7 +895,7 @@ class Eggbomb(Card):
                          "Apply aroma on this axie until next round")
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
-        self.owner.apply_stat_eff("aroma", 1, turns=0)  # should disappear at start of next turn
+        self.owner.apply_stat_eff("aroma", 1)  # should disappear at start of next turn
         return 0
 
 
@@ -776,21 +915,14 @@ class DarkSwoop(Card):
         :param defender:
         :return:
         """
-        if self.owner is attacker:
+        if self is cards_played_this_turn[self.owner][0] and self.owner is attacker:
             final_speeds = {axie: 0 for axie in cards_played_this_turn.keys()}
 
             for axie, speed in [(axie, axie.speed) for axie in cards_played_this_turn.keys()]:
+                s, m = axie.buffs.on_target_select()
+                speed_mult = 1 + s
 
-                speed_mult = 1
-
-                # status effects
-                for buff, (count, rounds) in axie.buffs.items():
-                    if buff == "speed up":
-                        speed_mult += 0.2 * count
-                    if buff == "speed down":
-                        speed_mult -= 0.2 * count
-
-                final_speeds[axie] = speed * speed_mult
+                final_speeds[axie] = (speed * speed_mult, axie.hp, axie.morale * (1 + m))
 
             # tODO only choose from opponents team
 
@@ -806,15 +938,9 @@ class Blackmail(Card):
         super().__init__("Pigeon post", "back", "Blackmail", "bird", 1, "ranged", 120, 10,
                          "Transfer all debuffs on this axie to target")
 
-    def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
+    def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:  # TODO
 
-        keys_to_del = []
-        for debuff, (stacks, duration) in self.owner.buffs.items():
-            if debuff in debuffs:
-                defender.apply_stat_eff(debuff, stacks, duration)
-                keys_to_del.append(debuff)
-        for key in keys_to_del:
-            del self.owner.buffs[key]
+        self.owner.buffs.transfer(defender.buffs)
 
         return 0
 
@@ -826,7 +952,7 @@ class RiskyFeather(Card):
                          "Apply 2 Attack- to this axie")
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
-        self.owner.apply_stat_eff("attack down", times=2, turns=10000)  # goes away on attack
+        self.owner.apply_stat_eff("attack down", 2)  # goes away on attack
         return 0
 
 # </editor-fold>
@@ -841,7 +967,7 @@ class StickyGoo(Card):
 
     def on_shield_break(self, match, cards_played_this_turn, attacker, defender):
         if self.owner is defender and not self.triggered:
-            attacker.apply_stat_eff("stun", 1)
+            attacker.apply_stat_eff("stun", True)
             self.triggered = True
         return False
 
@@ -897,7 +1023,7 @@ class BuzzingWind(Card):
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
         if self.owner is attacker:
-            defender.apply_stat_eff("fragile", 1, 0)
+            defender.apply_stat_eff("fragile", True)
         return 0
 
 
@@ -908,7 +1034,7 @@ class MysticRush(Card):
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
         if self.owner is attacker:
-            defender.apply_stat_eff("speed down", 1, 2)
+            defender.apply_stat_eff("speed down", (2, 1))
         return 0
 
 
@@ -933,7 +1059,7 @@ class GrubSurprise(Card):
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
         if self.owner is attacker:
             if defender.shield:
-                defender.apply_stat_eff("fear", 1)
+                defender.apply_stat_eff("fear", 1)   # TODO is that correct? does it only apply for current turn?
         return 0
 
 
@@ -977,7 +1103,7 @@ class BloodTaste(Card):
         super().__init__(*attributes_from_df("Blood Taste"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker:
+        if atk_card is self:
             self.owner.change_hp(amount)
 
 
@@ -1000,7 +1126,7 @@ class TerrorChomp(Card):
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
         if self.owner is attacker:
             if len(match.chain_cards) > 0:
-                defender.apply_stat_eff("fear", 1, 2)
+                defender.apply_stat_eff("fear", 3)
         return 0
 
 
@@ -1022,7 +1148,7 @@ class ChemicalWarfare(Card):
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
         if self.owner is attacker:
-            defender.apply_stat_eff("stench", 1, 1)
+            defender.apply_stat_eff("stench", 1)
         return 0
 
 
@@ -1045,7 +1171,7 @@ class AnestheticBait(Card):
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
         if self.owner is defender:
             if attacker.element in ("aqua", "bird"):
-                attacker.apply_stat_eff("stun", 1)
+                attacker.apply_stat_eff("stun", True)
         return 0
 
 
@@ -1066,19 +1192,19 @@ class GrubExplode(Card):
         super().__init__(*attributes_from_df("Grub explode"))
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
-        if self.owner is attacker and self.owner.last_stand:
+        if self.owner.last_stand:
             self.owner.last_stand = False
             return 1
         return 0
 
 
-class AllergicReacion(Card):
+class AllergicReaction(Card):
 
     def __init__(self):
         super().__init__(*attributes_from_df("Allergic reaction"))
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
-        if self.owner is attacker and set(debuffs).intersection(set(defender.buffs.keys())):
+        if self.owner is attacker and defender.buffs.is_debuffed():
             return 0.3
         return 0
 
@@ -1093,7 +1219,7 @@ class TurnipRocket(Card):
         super().__init__(*attributes_from_df("Turnip rocket"))
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
-        if self.owner is attacker:
+        if self is cards_played_this_turn[self.owner][0] and self.owner is attacker:
             if len(cards_played_this_turn[self.owner]) >= 3:
                 return set(), [card for card in defender.player.team if card.element == "bird"]
         return set(), list()
@@ -1114,9 +1240,7 @@ class CleanseScent(Card):
         super().__init__(*attributes_from_df("Cleanse scent"))
 
     def on_play(self, match, cards_played_this_turn):
-        for buff, (_, _) in self.owner.buffs.items():
-            if buff in debuffs:
-                self.owner.reduce_stat_eff(buff, "all")
+        self.owner.buffs.remove_debuffs()
 
 
 class AquaStock(Card):
@@ -1139,7 +1263,7 @@ class Refresh(Card):
         i = self.owner.player.team.index(self.owner)
         if i == 1:
             front_mate = self.owner.player.team[0]
-        if i == 2:
+        elif i == 2:
             front_mate = self.owner.player.team[1]
         else:
             front_mate = None
@@ -1147,9 +1271,7 @@ class Refresh(Card):
         if front_mate:
             if front_mate.alive() and not front_mate.last_stand:
 
-                for buff, (_, _) in front_mate.buffs.items():
-                    if buff in debuffs:
-                        front_mate.reduce_stat_eff(buff, "all")
+                front_mate.buffs.remove_debuffs()
 
 
 class OctoberTreat(Card):
@@ -1215,10 +1337,19 @@ class PricklyTrap(Card):
         super().__init__(*attributes_from_df("Prickly trap"))
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
-        if self.owner is attacker:
-            if self.owner is match.get_axies_in_attack_order(cards_played_this_turn)[-1]:
-                return 0.2
+        if self.owner is match.get_axies_in_attack_order(cards_played_this_turn)[-1]:
+            return 0.2
         return 0
+
+
+class DrainBite(Card):
+
+    def __init__(self):
+        super().__init__(*attributes_from_df("Drain bite"))
+
+    def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
+        if self is atk_card:
+            self.owner.change_hp(amount)
 
 
 class SeedBullet(Card):
@@ -1227,21 +1358,15 @@ class SeedBullet(Card):
         super().__init__(*attributes_from_df("Seed bullet"))
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
-        if self.owner is attacker:
+        if self is cards_played_this_turn[self.owner][0] and self.owner is attacker:
             final_speeds = {axie: 0 for axie in cards_played_this_turn.keys()}
 
             for axie, speed in [(axie, axie.speed) for axie in cards_played_this_turn.keys()]:
 
-                speed_mult = 1
+                s, m = axie.buffs.on_target_select()
+                speed_mult = 1 + s
 
-                # status effects
-                for buff, (count, rounds) in axie.buffs.items():
-                    if buff == "speed up":
-                        speed_mult += 0.2 * count
-                    if buff == "speed down":
-                        speed_mult -= 0.2 * count
-
-                final_speeds[axie] = speed * speed_mult
+                final_speeds[axie] = (speed * speed_mult, axie.hp, axie.morale * (1+m))
 
             # tODO only choose from opponents team
 
@@ -1257,10 +1382,11 @@ class VegetalBite(Card):
         super().__init__(*attributes_from_df("Vegetal bite"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if len(cards_played_this_turn[self.owner]) > 1 and defender.player.energy > 0:
-            defender.player.gain_energy(-1)
-            self.owner.player.gain_energy(1)
-        return 0
+        if atk_card is self:
+            if len(cards_played_this_turn[self.owner]) > 1 and defender.player.energy > 0:
+                defender.player.gain_energy(-1)
+                self.owner.player.gain_energy(1)
+            return 0
 
 
 class VeganDiet(Card):
@@ -1269,7 +1395,7 @@ class VeganDiet(Card):
         super().__init__(*attributes_from_df("Vegan diet"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker and defender.element == "plant":
+        if atk_card is self and defender.element == "plant":
             self.owner.change_hp(amount)
 
 
@@ -1323,7 +1449,7 @@ class GasUnleash(Card):
         super().__init__(*attributes_from_df("Gas unleash"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker:
+        if atk_card is self:
             defender.apply_stat_eff("poison", 1)
         if self.owner is defender:
             attacker.apply_stat_eff("poison", 1)
@@ -1349,7 +1475,7 @@ class SpicySurprise(Card):
         super().__init__(*attributes_from_df("Spicy surprise"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker:
+        if atk_card is self:
             defender.disable("mouth", 1)
 
 
@@ -1374,7 +1500,7 @@ class SpikeThrow(Card):
         super().__init__(*attributes_from_df("Spike Throw"))
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
-        if self.owner is attacker and len(cards_played_this_turn[self.owner]) >= 3:
+        if self is cards_played_this_turn[self.owner][0] and self.owner is attacker and len(cards_played_this_turn[self.owner]) >= 3:
             return set(), sorted([axie for axie in defender.player.team if axie.alive()], key=lambda xe: xe.shield)
         return set(), list()
 
@@ -1419,14 +1545,15 @@ class SlipperyShield(Card):
         if self.owner is self.owner.player.team[2] and self.owner.player.team[1].alive():
             self.owner.player.team[2].shield += int(self.owner.shield * 0.15)
 
+
 class NileStrike(Card):
 
     def __init__(self):
         super().__init__(*attributes_from_df("Nile Strike"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker:
-            defender.apply_stat_eff("speed down", 1, 2)
+        if atk_card is self:
+            defender.apply_stat_eff("speed down", (3, 1))
 
 
 class PooFling(Card):
@@ -1435,8 +1562,8 @@ class PooFling(Card):
         super().__init__(*attributes_from_df("Poo Fling"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker:
-            defender.apply_stat_eff("stench", 1, 0)  # todo check this
+        if atk_card is self:
+            defender.apply_stat_eff("stench", 1)  # todo check this
 
 
 class ScalyLunge(Card):
@@ -1466,18 +1593,10 @@ class SurpriseInvasion(Card):
             final_speeds = {axie: 0 for axie in axies}
 
             for axie, speed in init_speeds:
+                s, m = axie.buffs.on_target_select()
+                speed_mult = 1 + s
 
-                speed_mult = 1
-
-                # status effects
-                for buff, (count, turns) in axie.buffs.items():
-                    if buff == "speed up":
-                        speed_mult += 0.2 * count
-                    if buff == "speed down":
-                        speed_mult -= 0.2 * count
-
-                # this breaks ties by hp & morale
-                final_speeds[axie] = (speed * speed_mult, axie.hp, axie.morale)
+                final_speeds[axie] = (speed * speed_mult, axie.hp, axie.morale * (1 + m))
 
             ranked_axies = sorted(axies, key=lambda axie: final_speeds[axie], reverse=True)
 
@@ -1504,8 +1623,8 @@ class Disarm(Card):
         super().__init__(*attributes_from_df("Disarm"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self.owner is attacker:
-            defender.apply_stat_eff("speed down", 1, 2)
+        if atk_card is self:
+            defender.apply_stat_eff("speed down", (3, 1))
 
 
 class OvergrowKeratin(Card):
@@ -1514,7 +1633,8 @@ class OvergrowKeratin(Card):
         super().__init__(*attributes_from_df("Overgrow Keratin"))
 
     def on_play(self, match, cards_played_this_turn):
-        self.owner.shield += 20
+        if self.owner.shield <= 0:
+            self.owner.shield += 20
 
 
 class SneakyRaid(Card):
@@ -1523,7 +1643,7 @@ class SneakyRaid(Card):
         super().__init__(*attributes_from_df("Sneaky Raid"))
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
-        if self.owner is attacker:
+        if self is cards_played_this_turn[self.owner][0] and self.owner is attacker:
             return set(), [axie for axie in defender.player.team[::-1] if axie.alive()]
         return set(), list()
 
@@ -1545,18 +1665,10 @@ class KotaroBite(Card):
                 final_speeds = {axie: 0 for axie in axies}
 
                 for axie, speed in init_speeds:
+                    s, m = axie.buffs.on_target_select()
+                    speed_mult = 1 + s
 
-                    speed_mult = 1
-
-                    # status effects
-                    for buff, (count, turns) in axie.buffs.items():
-                        if buff == "speed up":
-                            speed_mult += 0.2 * count
-                        if buff == "speed down":
-                            speed_mult -= 0.2 * count
-
-                    # this breaks ties by hp & morale
-                    final_speeds[axie] = (speed * speed_mult, axie.hp, axie.morale)
+                    final_speeds[axie] = (speed * speed_mult, axie.hp, axie.morale * (1 + m))
 
                 ranked_axies = sorted(axies, key=lambda axie: final_speeds[axie], reverse=True)
                 if self.owner is ranked_axies[1]:
@@ -1580,7 +1692,7 @@ class Chomp(Card):
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
         if atk_card is self and len(cards_played_this_turn[self.owner]) >= 3:
-            defender.apply_stat_eff("stun", 1)
+            defender.apply_stat_eff("stun", True)
 
 
 class CriticalEscape(Card):
@@ -1600,7 +1712,7 @@ class ScaleDartIguana(Card):
         super().__init__(*attributes_from_df("Scale Dart"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
-        if self is atk_card and set(flatten(defender.buffs.keys()))-set(debuffs):
+        if self is atk_card and defender.buffs.is_buffed():
             self.owner.player.gain_energy(1)
 
 
@@ -1633,7 +1745,7 @@ class NeuroToxin(Card):
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
         if self is atk_card:
-            if "poison" in defender.buffs.keys():
+            if defender.buffs.entries["poison"] > 0:
                 defender.apply_stat_eff("attack down", 1)
 
 

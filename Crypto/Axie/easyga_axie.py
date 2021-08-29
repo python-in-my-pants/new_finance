@@ -1,16 +1,35 @@
 from itertools import combinations
-from random import sample
+from functools import lru_cache
 import my_pyeasyga
 from Axie_models import *
 from cards import *
+from Utility import timeit
+from sys import stdout
+
+print("Getting top ladder decks...")
+top_ladder_decks = Player.get_top_ladder_decks()
+print("Done!")
 
 
-def calc_pop_fitness(pop: List[Player], matches_per_matchup=30, matchup_lim_fraction=0.8, method="v2",
-                     matchups_per_deck=30):
+def calc_pop_fitness(pop: List[Player], matches_per_matchup=50, matchup_lim_fraction=0.8, method="v2",
+                     matchups_per_deck=0.25):
+    """
+
+    :param pop:
+    :param matches_per_matchup: regulates the accuracy of a matchup result
+    :param matchup_lim_fraction: for v1: fraction of possible matchups that are simulated; regulates the accuracy of
+                                         fitness in population
+    :param method:
+    :param matchups_per_deck: for v2: regulates the accuracy of  fitness in population
+    :return:
+    """
 
     print("Calculating fitness ...")
     deck_results: Dict[Player, float] = {p: 0.0 for p in pop}
     t = int(len(pop)*(len(pop)-1)*0.5)
+    deck_matchup_counter = {deck: 0 for deck in pop}
+
+    shuffle(pop)
 
     def v1():  # extensive evaluation, most accurate and most expensive
         i = 0
@@ -23,43 +42,143 @@ def calc_pop_fitness(pop: List[Player], matches_per_matchup=30, matchup_lim_frac
             i += 1
 
     def v2():  # limit the portion of matchups for faster calc
-        i = 0
+        nonlocal deck_matchup_counter
         for j, deck in enumerate(pop):
             one = deck
             # print(f'Starting {deck} ({j+1}) matches')
-            for k in range(min(matchups_per_deck//2, len(pop)-1)):
+            for k in range(int(min((matchups_per_deck * len(pop))//2, len(pop)-1))):
                 two = pop[(j+k+1) % len(pop)]
                 m = Match(one, two)
                 r = sum([m.run_simulation() for _ in range(matches_per_matchup)]) / matches_per_matchup
                 deck_results[one] += r
                 deck_results[two] += -r
-                i += 1
+                deck_matchup_counter[one] += 1
+                deck_matchup_counter[two] += 1
 
     def v3():  # like v2, but purley based on wins
-        i = 0
+        nonlocal deck_matchup_counter
         for j, deck in enumerate(pop):
             one = deck
             # print(f'Starting {deck} ({j+1}) matches')
-            for k in range(min(matchups_per_deck // 2, len(pop) - 1)):
+            for k in range(int(min((matchups_per_deck * len(pop)) // 2, len(pop) - 1))):
                 two = pop[(j + k + 1) % len(pop)]
                 m = Match(one, two)
                 r = sum([m.run_simulation() for _ in range(matches_per_matchup)]) / matches_per_matchup
                 deck_results[one] += 1 if r > 0 else 0
                 deck_results[two] += 1 if r < 0 else 0
-                i += 1
+                deck_matchup_counter[one] += 1
+                deck_matchup_counter[two] += 1
 
     if method == "v1":
         v1()
         return {player: deck_results[player] / t for player in pop}
     if method == "v2":
-        matches_per_matchup = 1
         v2()
-        return {player: deck_results[player] / min(matchups_per_deck//2, t) for player in pop}
+        return {player: deck_results[player] / deck_matchup_counter[player] for player in pop}
     if method == "v3":
         v3()
-        return {player: deck_results[player] / min(matchups_per_deck//2, t) for player in pop}
+        return {player: deck_results[player] / deck_matchup_counter[player] for player in pop}
 
     raise NotImplementedError
+
+
+def single_deck_evaluation(team):
+
+    hints = []  # (importance, hint)
+
+    hp_score = sum([axie.hp for axie in team]) / 183
+    dmg_score = sum([sum([card.attack for card in axie.cards]) for axie in team]) / (540 * 3)
+    shield_score = sum([sum([card.defense for card in axie.cards]) for axie in team]) / (375 * 3)
+    speed_score = sum([axie.speed for axie in team]) / 183
+
+    group1 = ("reptile", "plant", "dusk")
+    group2 = ("aqua", "bird", "dawn")
+    group3 = ("mech", "beast", "bug")
+
+    # <editor-fold desc="dmg types relative">
+    # 1 - (result / 133); result is diff of each type from 33%
+    g1, g2, g3 = 0, 0, 0
+    for axie in team:
+        for card in axie.cards:
+            if card.element in group1:
+                g1 += card.attack
+            if card.element in group2:
+                g2 += card.attack
+            if card.element in group3:
+                g3 += card.attack
+    rel = [elem/(g1+g2+g3) for elem in (g1, g2, g3)]
+
+    dmg_type_score = 1 - (sum([abs(elem - 0.33) for elem in rel]) / 133)
+    # </editor-fold>
+
+    # <editor-fold desc="dmg distribution (axie + types) has every axie every type of damage?">
+    axie_points = [0 for _ in range(3)]
+    for ii, axie in enumerate(team):
+        if axie.element in group1:
+            for card in axie.cards:
+                if card.attack >= 50 and (card in group1 or card in group2):
+                    axie_points[ii] += 1
+        elif axie.element in group2:
+            for card in axie.cards:
+                if card.attack >= 50 and (card in group2 or card in group3):
+                    axie_points[ii] += 1
+        elif axie.element in group3:
+            for card in axie.cards:
+                if card.attack >= 50 and (card in group3 or card in group1):
+                    axie_points[ii] += 1
+    # only use assumtion of 3 dmg cards per axie to not rule out utility cards
+    dmg_distribution_score = sum([min(1.0, axie_points[ii] / 3) for ii in range(3)]) / 3
+    # </editor-fold>
+
+    # shield distribution
+    ...
+
+    # energy gain
+    ...
+
+    # energy steal
+    ...
+
+    # backdoors (types)
+    ...
+
+    # draw power
+    ...
+
+    # disables
+    ...
+
+    # buffs / debuffs
+    ...
+
+    # 1 zero cost per axie
+    ...
+
+
+def ladder_fitness_factory(top_ladder_limit=30, matches_per_matchup=30):
+
+    #@timeit
+    #@lru_cache()
+    def fitness_against_top_ladder(v, _):
+        #print("Calculating fitness for", v)
+        stdout.write(".")
+        fit = 0
+        for ladder_deck in sample(top_ladder_decks, top_ladder_limit):
+            m = Match(v, ladder_deck)
+            fit += sum([m.run_simulation() for _ in range(matches_per_matchup)]) / matches_per_matchup
+        return fit
+
+    #@timeit
+    #@lru_cache()
+    def fitness_against_top_ladder_comprehension(v, _):
+        #print("Calculating fitness for", v)
+        stdout.write(".")
+        return sum(
+            [sum([Match(v, ladder_deck).run_simulation() for _ in range(matches_per_matchup)]) / matches_per_matchup
+             for ladder_deck in sample(top_ladder_decks, top_ladder_limit)]
+        ) / top_ladder_limit
+
+    return fitness_against_top_ladder_comprehension
 
 
 # define and set function to create a candidate solution representation
@@ -111,10 +230,23 @@ def fitness(individual, data):
     return population_fitness_table[individual]
 
 
+def on_generation_factory(matchups_per_deck=0.3, matches_per_matchup=50, matchup_lim_fraction=0.8, method="v2"):
+
+    def inner(model):
+        global population_fitness_table
+        population_fitness_table = calc_pop_fitness([chromosome.genes for chromosome in model.current_generation],
+                                                    matchups_per_deck=matchups_per_deck,
+                                                    matches_per_matchup=matches_per_matchup,
+                                                    matchup_lim_fraction=matchup_lim_fraction,
+                                                    method=method)
+
+    return inner
+
+
 def on_generation(model):
     global population_fitness_table
     population_fitness_table = calc_pop_fitness([chromosome.genes for chromosome in model.current_generation],
-                                                matchups_per_deck=50)
+                                                matchups_per_deck=0.3, matches_per_matchup=50)
 
 
 def get_premade_decks():
@@ -145,7 +277,7 @@ def get_premade_decks():
 # bot agent greed       1       1
 ga = my_pyeasyga.GeneticAlgorithm(list(),
                                   initial_population=Axie.get_genetically_complete_pop(5)+get_premade_decks(),
-                                  population_size=50,
+                                  # population_size=50,
                                   generations=100,
                                   crossover_probability=1,
                                   mutation_probability=0.1,
@@ -157,8 +289,9 @@ population_fitness_table = None
 ga.create_individual = create_individual
 ga.crossover_function = crossover1
 ga.mutate_function = mutate
-ga.fitness_function = fitness
-ga.on_generation = on_generation
+ga.fitness_function = ladder_fitness_factory(top_ladder_limit=15, matches_per_matchup=26)
+"""ga.on_generation = on_generation_factory(matchups_per_deck=0.7, matches_per_matchup=30,
+                                         matchup_lim_fraction=0.8, method="v2")"""
 
 try:
     ga.run()

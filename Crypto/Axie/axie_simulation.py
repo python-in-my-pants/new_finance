@@ -1,6 +1,10 @@
 from Axie.Axie_models import *
 from Axie.cards import *
 from Utility import timeit
+from matplotlib import pyplot as plt
+from numpy import convolve, ones
+from random import random
+
 
 """
 p1 = Player([Axie("bird", DarkSwoop(), Eggbomb(), Blackmail(), RiskyFeather()),
@@ -26,6 +30,63 @@ def single_fight():
         print(axie.long())
 
     print(Match(p1, p2).run_simulation())
+
+
+def match_significance():
+
+    results = []
+
+    matchups = 100
+    for j in range(matchups):
+        print("Matchup:", j)
+        p1, p2 = Player.get_random(), Player.get_random()
+        m = Match(p1, p2)
+        matches_per_matchup = 100
+        results.append(sum([m.run_simulation() for _ in range(matches_per_matchup)]) / matches_per_matchup)
+
+    s = sum([1 for r in results if abs(r) >= 0.1])
+    print(f'Result is significantly different from 0 (10%) in '
+          f'{100 * s / len(results):.2f} % ({s}) of cases')
+
+    plt.plot(sorted(results), range(len(results)))
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_vs_random():
+
+    p1, p2 = Player.get_random(), Player.get_random()
+
+    print("Player 1 team:")
+    for axie in p1.team:
+        print(axie.long())
+
+    print("Player 2 team:")
+    for axie in p2.team:
+        print(axie.long())
+
+    m = Match(p1, p2)
+
+    results = [m.run_simulation() for _ in range(100)]
+    rand = [random()*2-1 for _ in range(len(results))]
+
+    def get_sma(ser, n):
+        return convolve(ser, ones(n) / n, mode='valid')
+
+    sma_len = 10
+    sma_res = get_sma(results, sma_len)
+    sma_rand = get_sma(rand, sma_len)
+
+    #plt.plot(range(len(results)), results, label="results")
+    #plt.plot(range(len(results)), rand, label="random")
+    plt.plot(range(len(results) - len(sma_res), len(results)), sma_res, label="results")
+    plt.plot(range(len(results) - len(sma_rand), len(results)), sma_rand, label="random")
+
+    plt.plot(range(len(results)), [sum(results) / len(results) for _ in range(len(results))], label="res avg")
+    plt.plot(range(len(results)), [sum(rand) / len(results) for _ in range(len(results))], label="rand avg")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
 
 def human_fight_test(deck=None):
@@ -83,6 +144,37 @@ def deck_fight():
     #"""
 
 
+def premade_decks_fight():
+
+    deck1 = [Axie("plant", VegetalBite(), Disguise(), AquaStock(), SpicySurprise()),
+                        Axie("beast", NutCrack(), SinisterStrike(), RevengeArrow(), NutThrow()),
+                        Axie("bird", DarkSwoop(), Eggbomb(), Blackmail(), AllOutShot())]
+    deck2 = [Axie("dusk",  FishHook(), Disarm(), NileStrike(), CattailSlap()),
+             Axie("dusk",  BloodTaste(), Disarm(), NileStrike(), TailSlap()),
+             Axie("dusk",  FishHook(), SinisterStrike(), BalloonPop(), TailSlap())]
+    p1, p2 = Player(deck1), Player(deck2)
+
+    print("Player 1 team:")
+    for axie in p1.team:
+        print(axie.long())
+
+    print("Player 2 team:")
+    for axie in p2.team:
+        print(axie.long())
+
+    results = []
+    n = 1000
+
+    for i in range(n):
+        if i % 100 == 0:
+            print("Starting game", i)
+        results.append(Match(p1, p2).run_simulation())
+
+    print()
+    print("Avg:", sum(results) / len(results))
+    print("Winrate:", 100 * len([x for x in results if x > 0]) / n)
+
+
 @timeit
 def sample_tournament(n_decks=100, matches_per_matchup=100):
 
@@ -129,9 +221,6 @@ def player_hash_test():
 
 
 def plot_test():
-    from matplotlib import pyplot as plt
-    from numpy import convolve, ones
-    from random import random
 
     def get_sma(ser, n):
         return convolve(ser, ones(n) / n, mode='valid')
@@ -145,7 +234,13 @@ def plot_test():
     plt.show()
 
 
-human_fight_test([Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap()),
-                  Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap()),
-                  Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap())])
+def top_ladder_decks_test():
+    for p in Player.get_top_ladder_decks():
+        print(p.as_tuple())
 
+
+"""human_fight_test([Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap()),
+                  Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap()),
+                  Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap())])"""
+
+top_ladder_decks_test()

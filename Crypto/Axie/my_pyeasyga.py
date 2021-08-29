@@ -68,6 +68,8 @@ class GeneticAlgorithm(object):
 
         self.current_generation = []
 
+        print("Population size:", self.population_size)
+
         def create_individual(_):
             raise NotImplementedError
 
@@ -187,7 +189,7 @@ class GeneticAlgorithm(object):
 
         self.current_generation = new_population
 
-    def remove_doubles(self, new_population, refill=True, with_elem=False, max_sim=0.9):
+    def remove_doubles(self, new_population, refill=True, with_elem=False):
         """
 
         :param new_population:

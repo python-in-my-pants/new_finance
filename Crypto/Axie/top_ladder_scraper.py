@@ -1,3 +1,5 @@
+from pickle import Unpickler
+
 from bs4 import BeautifulSoup
 import time
 from dataclasses import dataclass
@@ -5,7 +7,7 @@ import pickle
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 import pandas as pd
-from pandasgui import show
+#from pandasgui import show
 
 
 pd.set_option("display.max_rows", None, "display.max_columns", None)
@@ -117,10 +119,19 @@ class SimpleAxieModel:
 
 def get_top_100_decks(use_cached=True, limit=100):
 
+    class CustomUnpickler(Unpickler):
+
+        def find_class(self, module, name):
+            if name == 'SimpleAxieModel':
+                return SimpleAxieModel
+            if name == 'SimplePart':
+                return SimplePart
+            return super().find_class(module, name)
+
     if use_cached:
         try:
             with open("leaderboard_teams.pickle", "rb") as file:
-                obj = pickle.load(file)
+                obj = CustomUnpickler(file).load()
                 for i, team in enumerate(obj):
                     #print(f'~~~~~~~~ Team #{i+1} ~~~~~~~~\n')
                     for axie in team:
@@ -190,8 +201,19 @@ def get_top_100_decks(use_cached=True, limit=100):
         from traceback import print_exc
         print(f'Exception occured while requesting: {e}')
         print_exc()
+
     finally:
-        browser.quit()
+
+        try:
+            browser.close()
+            browser.quit()
+            import os
+            os.system("taskkill /f /im geckodriver.exe /T")
+            os.system("taskkill /f /im chromedriver.exe /T")
+            os.system("taskkill /f /im IEDriverServer.exe /T")
+        except Exception as e:
+            pass
+
         with open("leaderboard_teams.pickle", "wb") as file:
             pickle.dump(player_teams, file)
 
@@ -201,7 +223,7 @@ decks = get_top_100_decks(use_cached=True, limit=100)
 
 def show_as_df(deck_list):
     try:
-        with open("leaderboard_team_df.pickle", "rb") as file:
+        with open("leaderboard_teams.pickle", "rb") as file:
             df = pickle.load(file)
     except Exception:
         full_decks = [deck for deck in deck_list if deck]
@@ -209,7 +231,7 @@ def show_as_df(deck_list):
         multi_ind = pd.MultiIndex.from_tuples(ind, names=["Deck", "Axie"])
         df = pd.DataFrame.from_records([axie.to_dict() for axie in flatten(full_decks)], index=multi_ind)
 
-        with open("leaderboard_team_df.pickle", "wb") as file:
+        with open("leaderboard_teams.pickle", "wb") as file:
             pickle.dump(df, file)
 
     print(df)
@@ -367,28 +389,29 @@ def show_deck_type_graph(edge_list, h="Headline", edge_limit=8):
     time.sleep(3)
 
 
-show_as_df(decks)
-super_simple_hist(get_single_class_usage())
-best_deck_combs = super_simple_hist(get_deck_combos())
+if __name__ == "__main__":
+    print("Running ...")
+    show_as_df(decks)
+    super_simple_hist(get_single_class_usage())
+    best_deck_combs = super_simple_hist(get_deck_combos())
 
-print("\nBest comb:", best_deck_combs[0], "\n")
-get_part_distribution(flatten(get_decks_with_composition(best_deck_combs[0])))
+    print("\nBest comb:", best_deck_combs[0], "\n")
+    get_part_distribution(flatten(get_decks_with_composition(best_deck_combs[0])))
 
-best_card_combs = get_best_card_combs(flatten(get_decks_with_composition(best_deck_combs[0])))
-best_card_combs2 = get_best_card_combs(flatten(get_decks_with_composition(best_deck_combs[1])))
-best_card_combs3 = get_best_card_combs(flatten(get_decks_with_composition(best_deck_combs[2])))
+    best_card_combs = get_best_card_combs(flatten(get_decks_with_composition(best_deck_combs[0])))
+    best_card_combs2 = get_best_card_combs(flatten(get_decks_with_composition(best_deck_combs[1])))
+    best_card_combs3 = get_best_card_combs(flatten(get_decks_with_composition(best_deck_combs[2])))
 
-show_deck_type_graph(best_card_combs, h=', '.join([t.title() for t in best_deck_combs[0]]))
-show_deck_type_graph(best_card_combs2, h=', '.join([t.title() for t in best_deck_combs[1]]))
-show_deck_type_graph(best_card_combs3, h=', '.join([t.title() for t in best_deck_combs[2]]))
+    show_deck_type_graph(best_card_combs, h=', '.join([t.title() for t in best_deck_combs[0]]))
+    show_deck_type_graph(best_card_combs2, h=', '.join([t.title() for t in best_deck_combs[1]]))
+    show_deck_type_graph(best_card_combs3, h=', '.join([t.title() for t in best_deck_combs[2]]))
 
-
-try:
-    browser.close()
-    browser.quit()
-    import os
-    os.system("taskkill /f /im geckodriver.exe /T")
-    os.system("taskkill /f /im chromedriver.exe /T")
-    os.system("taskkill /f /im IEDriverServer.exe /T")
-except Exception as e:
-    pass
+    try:
+        browser.close()
+        browser.quit()
+        import os
+        os.system("taskkill /f /im geckodriver.exe /T")
+        os.system("taskkill /f /im chromedriver.exe /T")
+        os.system("taskkill /f /im IEDriverServer.exe /T")
+    except Exception as e:
+        pass

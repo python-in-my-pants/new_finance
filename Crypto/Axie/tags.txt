@@ -1,0 +1,44 @@
+aqua
+aroma
+attack-
+backdoor
+beast
+bird
+buff
+bug
+chain
+chill
+cleanse
+combo
+crit
+dawn
+debuff
+disable
+draw
+dusk
+energy
+energy control
+energy gain
+fear
+fragile
+heal
+increase damage
+increase shield
+jinx
+last stand
+lethal
+mech
+morale-
+multi attack
+on:defense
+on:first attack
+on:low hp
+on:shield break
+plant
+poison
+reduce damage
+reptile
+sleep
+speed-
+stench
+stun
