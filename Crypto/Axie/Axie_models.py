@@ -1196,7 +1196,7 @@ class Match:
                         if foc:
                             focus = [xe] + focus
                         if om:
-                            to_omit.union(xe)
+                            to_omit.add(xe)
 
                 focus = [elem for elem in focus if elem.alive()]
                 to_omit = {elem for elem in to_omit if elem.alive()}
@@ -1405,6 +1405,10 @@ class Match:
 
                         debug(f'\tAttack target after attack: {attack_target}')
                         debug(f'\t     Attacker after attack: {axie}\n')
+
+                    for xe in self.player1.team+self.player2.team:
+                        if xe.alive():
+                            xe.buffs.on_action()
 
             # reset "once per round" effects
             for card in flat_cards_to_play:

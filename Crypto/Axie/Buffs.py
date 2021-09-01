@@ -55,9 +55,6 @@ class Buffs:
             else:
                 self.entries[entry].update({turns: max(min(stacks, 5), -5)})
             return
-        if entry in self.binary:
-            self.entries[entry] = self.entries[entry] or data
-            return
 
     def transfer(self, other):
         # todo
@@ -148,7 +145,6 @@ class Buffs:
 
     def can_hit(self):
         if self.entries["fear"]:
-            self.entries["fear"] = max(self.entries["fear"]-1, 0)
             return False
         if self.entries["stun"]:
             self.entries["stun"] = False
@@ -202,6 +198,10 @@ class Buffs:
 
     def on_tick(self):
         return self.entries["poison"] * self.poison_dmg
+
+    def on_action(self):
+        if self.entries["fear"]:
+            self.entries["fear"] = max(self.entries["fear"]-1, 0)
 
     def on_turn(self):
 

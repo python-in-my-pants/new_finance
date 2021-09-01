@@ -22,6 +22,12 @@ def set_tags_in_df():
         if "apply" in eff:
             if "+" in eff:
                 tags[i].append("buff")
+                if "speed" in eff:
+                    tags[i].append("speed+")
+                if "attack" in eff:
+                    tags[i].append("attack+")
+                if "morale" in eff:
+                    tags[i].append("morale+")
             elif "-" in eff:
                 if "speed" in eff:
                     tags[i].append("speed-")
@@ -117,6 +123,25 @@ def set_tags_in_df():
         print(row["Card name"], row["Effect"], row["Tags"])
 
     card_dataframe.to_json("axie_card_data_w_tags.json")
+
+
+def get_cards_with_tags(tags, selection_type="and"):
+
+    tags = set(tags)
+    to_ret = list()
+
+    for name in card_dataframe["Card name"].values:
+
+        if selection_type == "and":
+            # all occur
+            if not tags - set(card_dataframe[card_dataframe["Card name"] == name]["Tags"].values[0]):
+                to_ret.append(name)
+
+        if selection_type == "or":
+            if set(card_dataframe[card_dataframe["Card name"] == name]["Tags"].values[0]).intersection(tags):
+                to_ret.append(name)
+
+    return card_dataframe[card_dataframe["Card name"].isin(to_ret)]
 
 
 def part_name_to_card_name(part_name, part):
@@ -412,7 +437,7 @@ class FlankingSmack(Card):
         super().__init__(*attributes_from_df("Flanking smack"))
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
-        if self is match.get_axies_in_attack_order(cards_played_this_turn)[0]:
+        if self is match.axies_in_attack_order[0]:
             return 0.2
         return 0
 
@@ -841,7 +866,7 @@ class EarlyBird(Card):
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
         if self.owner is attacker:
-            if self is match.get_axies_in_attack_order(cards_played_this_turn)[0]:
+            if self is match.axies_in_attack_order[0]:
                 return 0.2
         return 0
 
@@ -1337,7 +1362,7 @@ class PricklyTrap(Card):
         super().__init__(*attributes_from_df("Prickly trap"))
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
-        if self.owner is match.get_axies_in_attack_order(cards_played_this_turn)[-1]:
+        if self.owner is match.axies_in_attack_order[-1]:
             return 0.2
         return 0
 
@@ -1766,3 +1791,12 @@ def get_all_card_classes():
     all_cards = [cls for _, cls in inspect.getmembers(importlib.import_module("cards"), inspect.isclass)[:-1]
                  if issubclass(cls, Card) and cls is not Card]
     return {part: [card for card in all_cards if card().body_part == part] for part in ("mouth", "back", "horn", "tail")}
+
+
+if __name__ == "__main__":
+    pd.set_option("display.max_rows", None, "display.max_columns", None)
+    pd.set_option('display.width', 1000)
+    pd.set_option('display.max_colwidth', 500)
+    pd.set_option('display.float_format', lambda x: '%.2f' % x)
+
+    print(get_cards_with_tags(["heal"]))
