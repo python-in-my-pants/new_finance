@@ -131,7 +131,7 @@ def part_names_from_genes(genes: str):
         r2_genes = bit_genes32[22:32]
         r2_name = part_from_gene(r2_genes[0:4], part_type, r2_genes[4:])
 
-        return DDict({"d": dom_name, "r1": r1_name, "r2": r2_name})
+        return DDict({"element": bin_to_elem[dom_genes[0:4]], "d": dom_name, "r1": r1_name, "r2": r2_name})
 
     return DDict({
         "element": bin_to_elem[gene_dict.Class].lower().replace("aquatic", "aqua"),

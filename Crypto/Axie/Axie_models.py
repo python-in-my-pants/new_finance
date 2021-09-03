@@ -1,9 +1,12 @@
 from abc import abstractmethod, ABC
 from typing import List, Dict, Tuple
-from random import shuffle, sample, random, choice
+from random import shuffle, sample, random, choice, randint
 from copy import deepcopy, copy as shallowcopy
 from functools import reduce
 from traceback import print_exc
+from itertools import permutations
+from matplotlib import pyplot as plt
+from numpy import linspace, pi, degrees, arange, asarray
 import logging
 from Option_utility import get_timestamp
 from Buffs import Buffs
@@ -368,6 +371,31 @@ class Axie:
                     s.eyes.part_type.lower() if s.eyes.part_type.lower() != "aquatic" else "aqua",
                     s.ears.part_type.lower() if s.ears.part_type.lower() != "aquatic" else "aqua")
 
+    @staticmethod
+    def from_id(axie_id):
+        from axie_graphql import get_genes_by_id
+        from cards import part_name_to_card_name
+        from importlib import import_module
+        module = import_module("Axie.cards")
+
+        def to_class_name(x):
+            return x.replace("'", "").replace("-", " ").title().replace(" ", "")
+
+        def make_class(name):
+            return getattr(module, name)()
+
+        genes = get_genes_by_id(axie_id=axie_id)
+
+        m = make_class(to_class_name(part_name_to_card_name(genes["mouth"]["d"], "mouth")))
+        h = make_class(to_class_name(part_name_to_card_name(genes["horn"]["d"], "horn")))
+        b = make_class(to_class_name(part_name_to_card_name(genes["back"]["d"], "back")))
+        t = make_class(to_class_name(part_name_to_card_name(genes["tail"]["d"], "tail")))
+
+        return Axie(genes["element"].lower() if genes["element"].lower() != "aquatic" else "aqua",
+                    m, h, b, t,
+                    genes["eyes"]["element"].lower() if genes["eyes"]["element"].lower() != "aquatic" else "aqua",
+                    genes["ears"]["element"].lower() if genes["ears"]["element"].lower() != "aquatic" else "aqua")
+
     def __init__(self, element: str, mouth: Card, horn: Card, back: Card, tail: Card, eyes=None, ears=None,
                  neutral=False):
 
@@ -534,6 +562,7 @@ class Axie:
         sleep = False
 
         atk = int(atk)
+        orig_atk = atk
         self.shield = int(self.shield)
         inflicted_dmg = 0
 
@@ -547,11 +576,11 @@ class Axie:
         for _card in fctp:
             block_last_stand = block_last_stand or _card.on_pre_last_stand(battle, cards_to_play, attacker, self)
 
-        def on_dmg_infl(x):
-            debug(f'Damage inflicted: {x}')
+        def on_dmg_infl():
+            debug(f'Damage inflicted: {orig_atk}')
             if atk_card:
                 for c in fctp:
-                    c.on_damage_inflicted(battle, cards_to_play, attacker, self, x, atk_card)
+                    c.on_damage_inflicted(battle, cards_to_play, attacker, self, orig_atk, atk_card)
 
         if self.last_stand:
 
@@ -563,7 +592,7 @@ class Axie:
 
                 self.last_stand_ticks -= 1
                 inflicted_dmg += atk
-                on_dmg_infl(inflicted_dmg)
+                on_dmg_infl()
 
                 if self.last_stand_ticks <= 0:
                     self.last_stand = False  # ded
@@ -604,7 +633,7 @@ class Axie:
                 else:
                     atk -= self.shield
                 self.shield = rem_shield
-                on_dmg_infl(inflicted_dmg)
+                on_dmg_infl()
                 return
 
         # after shield break
@@ -617,7 +646,7 @@ class Axie:
                 end_last_stand = end_last_stand or _card.on_last_stand(battle, cards_to_play, attacker, self)
 
             inflicted_dmg += self.hp
-            on_dmg_infl(inflicted_dmg)
+            on_dmg_infl()
 
             if not end_last_stand:
                 self.enter_last_stand(morale_multi)
@@ -626,9 +655,9 @@ class Axie:
         # lower hp
         else:
 
-            inflicted_dmg += min(atk, self.hp)
+            inflicted_dmg += atk
             self.change_hp(-atk)
-            on_dmg_infl(inflicted_dmg)
+            on_dmg_infl()
 
     def change_hp(self, amount):
         if self.alive() and not self.last_stand:  # TODO this seemingly is called when self is already dead ...
@@ -781,6 +810,58 @@ class Player:
 
         return [Player(team) for team in teams]
 
+    @staticmethod
+    def get_top_ladder_deck_evaluations():
+        eval_results = [deck.get_deck_evaluation() for deck in Player.get_top_ladder_decks()]
+        scores_averages = {
+            key: sum([eval_results[i][0][key] for i in range(len(eval_results))]) / len(eval_results)
+            for key in eval_results[0][0].keys()
+        }
+        raw_data_averages = {
+            "dmg_per_elem": {
+                "plant/reptile": 0,
+                "aqua/bird": 0,
+                "beast/bug": 0,
+                "per_axie": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+            },
+            "shield_distribution": {
+                "team": 0,
+                "front": 0,
+                "mid": 0,
+                "back": 0,
+            },
+            "hp": {
+                "team": 0,
+                "front": 0,
+                "mid": 0,
+                "back": 0,
+            }
+        }
+        for ii in range(len(eval_results)):
+            for key, val in eval_results[ii][1].items():
+
+                if key == "dmg_per_elem":
+
+                    for k, v in val.items():
+
+                        if k != "per_axie":
+                            raw_data_averages[key][k] += (v / len(eval_results))
+                        else:
+                            for i in range(len(raw_data_averages[key][k])):
+                                for j in range(3):
+                                    raw_data_averages[key][k][j][i] += (v[j][i] / len(eval_results))
+
+                elif key == "shield_distribution" or key == "hp":
+
+                    for k, v in val.items():
+                        raw_data_averages[key][k] += (v / len(eval_results))
+
+        return scores_averages, raw_data_averages
+
+    @staticmethod
+    def from_team_ids(team_ids, agent=None, greedy=False):
+        return Player([Axie.from_id(_id) for _id in team_ids], agent=agent, greedy=greedy)
+
     def __init__(self, team: List[Axie], agent=None, greedy=False):
         assert len(team) == 3
         for axie in team:
@@ -922,8 +1003,100 @@ class Player:
             if axie.alive():
                 for dis, stacks, in axie.disabilities.items():
                     debug(f'Disabled: {dis} for {stacks} rounds')
+                    
         return self.apply_selection(self.agent.select(self, game_state)) if self.agent else self.random_select(
             game_state)
+    
+    def get_many_possible_moves(self):
+        """
+        :param game_state: 
+        :return: many legal moves the player can make, given by a dict {axie: cards_played}
+        """
+
+        # randomly choose an energy limit
+        energy_limit = int(random() * self.energy)
+        energy_used = 0
+
+        def get_all_single_hand_selections(axie_hand, e_lim):
+            """
+            :param axie_hand:
+            :param e_lim:
+            :return: list of tuples (selected_cards_in_selected_order, cum_cost)
+            """
+            possible_selections = []
+            for selection_len in range(5):
+                for possible_sel in permutations(axie_hand, selection_len):
+                    c = sum([c.cost for c in possible_sel])
+                    if c <= e_lim:
+                        possible_selections.append((possible_sel, c))
+            return possible_selections
+
+        def get_random_selection_from_single_axie_hand(axie_hand, lim):
+            cards_to_select = sample(axie_hand, randint(0, 4))
+            while sum([c.cost for c in cards_to_select]) > lim:
+                cards_to_select = sample(axie_hand, randint(0, 4))
+            return cards_to_select, sum([c.cost for c in cards_to_select])
+
+        final_selection = {axie: [] for axie in self.team}
+        shuffled_hand = shuffle([(owner,
+                                  [card for card in cards if card.element not in card.owner.disabilities and
+                                                             card.part not in card.owner.disabilities])
+                                 for owner, cards in self.hand.items()])
+
+        for axie, a_hand in shuffled_hand:
+
+            if energy_used <= energy_limit:
+                sel, cost = get_random_selection_from_single_axie_hand(a_hand, energy_limit-energy_used)
+                final_selection[axie] = sel
+                energy_used += cost
+
+        return final_selection
+
+    # TODO
+    def get_all_possible_moves(self):
+        """
+        :return: many legal moves the player can make, given by a dict {axie: cards_played}
+        """
+
+        # randomly choose an energy limit
+        energy_limit = int(random() * self.energy)
+        energy_used = 0
+
+        def get_all_single_hand_selections(axie_hand, e_lim):
+            """
+            :param axie_hand:
+            :param e_lim:
+            :return: list of tuples (selected_cards_in_selected_order, cum_cost)
+            """
+            # if owner is dead, return empty list
+            if axie_hand and not axie_hand[0].owner.alive():
+                return []
+
+            possible_selections = []
+            for selection_len in range(min(len(axie_hand), 5)):
+                for possible_sel in permutations(axie_hand, selection_len):
+                    c = sum([c.cost for c in possible_sel])
+                    if c <= e_lim:
+                        possible_selections.append((possible_sel, c))
+            return possible_selections
+
+        final_selection = {axie: [] for axie in self.team}
+        shuffled_hand = shuffle([(owner,
+                                  [card for card in cards if card.element not in card.owner.disabilities and
+                                   card.part not in card.owner.disabilities])
+                                 for owner, cards in self.hand.items()])
+
+        single_hand_selections = [get_all_single_hand_selections(self.hand[axie], energy_limit) for axie in self.team]
+
+        for hand_1_selection in single_hand_selections[0]:
+
+            for hand_2_selection in single_hand_selections[1]:
+
+                ...
+
+
+
+        return final_selection
 
     def apply_selection(self, cards_picked) -> dict:
 
@@ -1003,6 +1176,304 @@ class Player:
 
     def get_relative_team_hp(self):
         return sum([float(axie.hp) / float(axie.base_hp) for axie in self.team]) / len(self.team)
+
+    # plotting & deck stats
+
+    def get_abs_dmg_per_elem(self):
+        group1 = ("reptile", "plant", "dusk")
+        group2 = ("aqua", "bird", "dawn")
+        group3 = ("mech", "beast", "bug")
+
+        # <editor-fold desc="dmg types relative">
+        # 1 - (result / 133); result is diff of each type from 33%
+        g1, g2, g3 = 0, 0, 0
+        ab = [[0 for _ in range(3)] for _ in range(3)]
+        for i, axie in enumerate(sorted(self.team, key=lambda x: x.base_hp, reverse=True)):
+
+            for card in axie.cards:
+                if card.element in group1:
+                    g1 += card.attack
+                    ab[i][0] += card.attack
+                if card.element in group2:
+                    g2 += card.attack
+                    ab[i][1] += card.attack
+                if card.element in group3:
+                    g3 += card.attack
+                    ab[i][2] += card.attack
+
+        return {
+            "plant/reptile": g1,
+            "aqua/bird": g2,
+            "beast/bug": g3,
+            "per_axie": ab
+        }
+
+    def get_dmg_type_per_axie(self):
+
+        group1 = ("reptile", "plant", "dusk")
+        group2 = ("aqua", "bird", "dawn")
+        group3 = ("mech", "beast", "bug")
+
+        axie_points = [0 for _ in range(3)]
+        for ii, axie in enumerate(self.team):
+            if axie.element in group1:
+                for card in axie.cards:
+                    if card in group1 or card in group2:
+                        axie_points[ii] += 1
+            elif axie.element in group2:
+                for card in axie.cards:
+                    if card in group2 or card in group3:
+                        axie_points[ii] += 1
+            elif axie.element in group3:
+                for card in axie.cards:
+                    if card in group3 or card in group1:
+                        axie_points[ii] += 1
+
+        return {
+            "plant/reptile": axie_points[0],
+            "aqua/bird": axie_points[1],
+            "beast/bug": axie_points[2],
+        }
+
+    def get_deck_evaluation(self):
+
+        """
+        TODO return scores in comparison to average meta deck from top 100
+        TODO
+
+        :return:
+        """
+
+        results = dict()
+        raw_data = dict()
+
+        # add hints in case of shortcomings in certain categories
+        hints = []  # (importance, hint)
+
+        results["hp_score"] = sum([axie.hp/Axie.hp_multi for axie in self.team]) / 183
+        raw_data["hp"] = {
+            "team": sum([xe.hp for xe in self.team]),
+            "front": self.team[0].base_hp,
+            "mid": self.team[1].base_hp,
+            "back": self.team[2].base_hp,
+        }
+
+        results["damage_score"] = sum([sum([card.attack for card in axie.cards]) for axie in self.team]) / (540 * 3)
+        results["shield_score"] = sum([sum([card.defense for card in axie.cards]) for axie in self.team]) / (375 * 3)
+        results["speed_score"] = sum([axie.speed for axie in self.team]) / 183
+
+        # dmg per type
+
+        # 1 - (result / 133); result is diff of each type from 33%
+        dmg_per_elem = self.get_abs_dmg_per_elem()
+        g1, g2, g3 = dmg_per_elem["plant/reptile"], dmg_per_elem["aqua/bird"], dmg_per_elem["beast/bug"]
+        rel = [elem / (g1 + g2 + g3) for elem in (g1, g2, g3)]
+
+        results["damage_diversity_score"] = 1 - (sum([abs(elem - 0.33) for elem in rel]) / 1.33)
+        raw_data["dmg_per_elem"] = dmg_per_elem
+
+        # dmg type per axie TODO overthink this
+
+        # axie_points = list(self.get_dmg_type_per_axie().values())
+        # only use assumtion of 3 dmg cards per axie to not rule out utility cards
+        # raw_data["dmg_distribution_score"] = sum([min(1.0, axie_points[ii] / 3) for ii in range(3)]) / 3
+
+        # shield distribution
+        shield_per_axie = [sum([c.defense for c in axie.cards]) for axie in self.team]
+        cum_shield = sum(shield_per_axie)
+
+        raw_data["shield_distribution"] = {
+            "team": cum_shield,
+            "front": shield_per_axie[0],
+            "mid": shield_per_axie[1],
+            "back": shield_per_axie[2]
+        }
+
+        # <editor-fold desc="Relative to META">
+
+        # energy gain
+        ...
+
+        # energy steal
+        ...
+
+        # backdoors (types)
+        ...
+
+        # draw power
+        ...
+
+        # disables
+        ...
+
+        # buffs / debuffs
+        ...
+
+        # 1 zero cost per axie
+        ...
+
+        # </editor-fold>
+
+        return results, raw_data
+
+    # ---
+
+    def plot_deck_stats_overview(self):
+
+        plt.style.use('Solarize_Light2')
+
+        fig = plt.figure()
+
+        ax1 = fig.add_subplot(221, projection="polar")
+        ax2 = fig.add_subplot(222)
+        # ax3 = fig.add_subplot(223)
+        ax4 = fig.add_subplot(224)
+
+        eval_results, raw_data = self.get_deck_evaluation()
+        top_ladder_eval_results, top_ladder_raw_data = Player.get_top_ladder_deck_evaluations()
+
+        # TODO add meta average
+        Player.radar_plot(ax1, "Deck scores", Player.deck_eval_to_dict([eval_results, top_ladder_eval_results]))
+
+        Player.bar_plot_dmg_types_distribution(ax2, "Your deck: Damage types/shield",
+                                               Player.dmg_types_to_plot_format(raw_data["dmg_per_elem"],
+                                                                               raw_data["shield_distribution"],
+                                                                               raw_data["hp"],
+                                                                               self.team))
+
+        Player.bar_plot_dmg_types_distribution(ax4, "Top ladder: Damage types/shield",
+                                               Player.dmg_types_to_plot_format(top_ladder_raw_data["dmg_per_elem"],
+                                                                               top_ladder_raw_data["shield_distribution"],
+                                                                               top_ladder_raw_data["hp"]))
+
+        #plt.get_current_fig_manager().window.showMaximized()
+        fig.tight_layout()
+        plt.tight_layout()
+
+        plt.show()
+
+    @staticmethod
+    def dmg_types_to_plot_format(dmg_types, shield_dist, hp_dist, team=None):
+        deck_dmg_types = dmg_types
+        dmg_type_per_axie = deck_dmg_types["per_axie"]
+
+        return [
+            [deck_dmg_types["plant/reptile"], dmg_type_per_axie[0][0], dmg_type_per_axie[1][0], dmg_type_per_axie[2][0]],
+            [deck_dmg_types["aqua/bird"], dmg_type_per_axie[0][1], dmg_type_per_axie[1][1], dmg_type_per_axie[2][1]],
+            [deck_dmg_types["beast/bug"], dmg_type_per_axie[0][2], dmg_type_per_axie[1][2], dmg_type_per_axie[2][2]],
+            [xe.element for xe in team] if team else ["N/A" for _ in range(3)],
+            [shield_dist["team"], shield_dist["front"], shield_dist["mid"], shield_dist["back"]],
+            [hp_dist["team"], hp_dist["front"], hp_dist["mid"], hp_dist["back"]]
+        ]
+
+    @staticmethod
+    def bar_plot_dmg_types_distribution(axes, name, data):
+        """
+        :param name:
+        :param axes:
+        :param data: [[team.plant, team.beast, team.aqua],
+                      [front.plant, front.beast, front.aqua, front.axie_type],
+                      ...]
+        :return:
+        """
+        type_to_color = {
+            "plant": '#006600',
+            "reptile": '#9933ff',
+            "beast": '#f0c800',
+            "bug": '#ff3300',
+            "bird": '#ff99cc',
+            "aqua": '#ccffff',
+            "N/A": '#888888'
+        }
+
+        X = arange(4)
+
+        axes.set_title(name)
+        #axes.get_xaxis().set_visible(False)
+
+        from pprint import pprint as pp
+        pp(data)
+
+        # TODO this is buggy
+
+        axes.bar(X - 0.3, data[0], color=type_to_color["plant"], width=0.2, label="Plant/Reptile")
+        axes.bar(X - 0.1, data[1], color=type_to_color["aqua"], width=0.2, label="Aqua/Bird")
+        axes.bar(X + 0.1, data[2], color=type_to_color["beast"], width=0.2, label="Beast/Bug")
+        axes.bar(X + 0.30625, data[5], color="#00cc00", width=0.075, label="HP")  # aqua
+        axes.bar(X + 0.38125, data[4], color="#0066cc", width=0.075, label="Shield")  # shield
+
+        axes.bar(1, -20, color=type_to_color[data[3][0]], width=0.9)  # axie types
+        axes.bar(2, -20, color=type_to_color[data[3][1]], width=0.9)  # axie types
+        axes.bar(3, -20, color=type_to_color[data[3][2]], width=0.9)  # axie types
+
+        axes.set_xticks(list(range(4)))
+        axes.set_xticklabels(["Team", "Front", "Mid", "Back"])
+
+        axes.legend(fancybox=True, shadow=True)
+
+
+        """rects = axes.patches
+        labels = ["Front", "Mid", "Back"]
+        for rect, label in zip(rects[-3:], labels):
+            height = rect.get_height()
+            axes.text(rect.get_x() + rect.get_width() / 2, height - 20, label, ha="center", va="bottom")"""
+
+        return axes
+
+    @staticmethod
+    def radar_plot(axes, name, input_data):
+        """
+        :param axes:
+        :param name:
+        :param input_data: {A: [attack_scores], B: [shield_scores], ...}
+        :return:
+        """
+
+        num_data_samples = len(list(input_data.values())[0])
+        data = [[] for _ in range(num_data_samples)]
+        categories = []
+        for key, val in input_data.items():
+            for i in range(len(val)):
+                data[i].append(val[i])
+            categories.append(key.capitalize().replace("_", " "))
+
+        categories = [*categories, categories[0]]
+
+        prep_data = [[] for _ in range(num_data_samples)]
+        for i in range(num_data_samples):
+            prep_data[i] = [*data[i], data[i][0]]
+
+        # ---------------------------------------------
+
+        label_loc = linspace(start=0, stop=2*pi, num=len(categories))
+        axes.set_title(name, y=1.05)
+
+        lines, labels = axes.set_thetagrids(degrees(label_loc), labels=categories)
+        axes.set_ylim(bottom=0, top=1)
+        axes.set_rgrids(arange(0, 1, step=0.2))
+
+        for i in range(num_data_samples):
+            axes.plot(label_loc, prep_data[i],
+                      label=f'{"Your deck" if i == 0 else "Top ladder average"}',
+                      color="#888888" if i == 1 else "#00cc00")
+
+        axes.legend(fancybox=True, shadow=True, bbox_to_anchor=(1.5, 1.0))
+
+        return axes
+
+    @staticmethod
+    def deck_eval_to_dict(evals):
+
+        if isinstance(evals, dict):
+            return {key: [val] for key, val in evals.items()}
+
+        elif isinstance(evals, list):
+            keys = evals[0].keys()
+            values = [[] for _ in range(len(keys))]
+            for entry in evals:
+                for i, key in enumerate(keys):
+                    values[i].append(entry[key])
+            return {key: val for key, val in zip(keys, values)}
 
 
 class Match:

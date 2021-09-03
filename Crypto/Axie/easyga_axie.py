@@ -5,6 +5,8 @@ from Axie_models import *
 from cards import *
 from Utility import timeit
 from sys import stdout
+from matplotlib import pyplot as plt
+from numpy import arange
 
 print("Getting top ladder decks...")
 top_ladder_decks = Player.get_top_ladder_decks()
@@ -82,7 +84,7 @@ def calc_pop_fitness(pop: List[Player], matches_per_matchup=50, matchup_lim_frac
     raise NotImplementedError
 
 
-def single_deck_evaluation(team):
+def single_deck_evaluation(team, plot=False):
 
     hints = []  # (importance, hint)
 
@@ -153,6 +155,20 @@ def single_deck_evaluation(team):
 
     # 1 zero cost per axie
     ...
+
+    if plot:
+        data = [g1, g2, g3]
+        X = arange(3)
+
+        fig = plt.figure()
+        ax = fig.add_axes([0, 0, 1, 1])
+
+        ax.bar(X + 0.00, data[0], color='#006600', width=0.25)  # plant
+        ax.bar(X + 0.25, data[1], color='#996633', width=0.25)  # beast
+        ax.bar(X + 0.50, data[2], color='#0066cc', width=0.25)  # aqua
+
+        plt.tight_layout()
+        plt.show()
 
 
 def ladder_fitness_factory(top_ladder_limit=30, matches_per_matchup=30):

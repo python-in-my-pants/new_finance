@@ -32,6 +32,17 @@ def single_fight():
     print(Match(p1, p2).run_simulation())
 
 
+def plot_deck_stats_test():
+
+    # p = Player.from_team_ids([4358428, 2949043, 4557896])
+    p = Player.from_team_ids([1386868, 2949043, 4759059])
+
+    for xe in p.team:
+        print(xe.long())
+
+    p.plot_deck_stats_overview()
+
+
 def match_significance():
 
     results = []
@@ -243,4 +254,5 @@ def top_ladder_decks_test():
                   Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap()),
                   Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap())])"""
 
-top_ladder_decks_test()
+if __name__ == "__main__":
+    plot_deck_stats_test()

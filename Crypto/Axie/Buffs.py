@@ -4,6 +4,9 @@ buffs = ["attack up", "morale up", "speed up"]
 debuffs = ["aroma", "stench", "attack down", "morale down", "speed down",
            "fear", "chill", "stun", "poison", "jinx", "fragile", "lethal", "sleep"]
 
+# sleep before dmg?
+# tick fear on OWN actions / own defenses?
+
 
 class Buffs:
     attack_buff = 0.2
