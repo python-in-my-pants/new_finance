@@ -84,94 +84,7 @@ def calc_pop_fitness(pop: List[Player], matches_per_matchup=50, matchup_lim_frac
     raise NotImplementedError
 
 
-def single_deck_evaluation(team, plot=False):
-
-    hints = []  # (importance, hint)
-
-    hp_score = sum([axie.hp for axie in team]) / 183
-    dmg_score = sum([sum([card.attack for card in axie.cards]) for axie in team]) / (540 * 3)
-    shield_score = sum([sum([card.defense for card in axie.cards]) for axie in team]) / (375 * 3)
-    speed_score = sum([axie.speed for axie in team]) / 183
-
-    group1 = ("reptile", "plant", "dusk")
-    group2 = ("aqua", "bird", "dawn")
-    group3 = ("mech", "beast", "bug")
-
-    # <editor-fold desc="dmg types relative">
-    # 1 - (result / 133); result is diff of each type from 33%
-    g1, g2, g3 = 0, 0, 0
-    for axie in team:
-        for card in axie.cards:
-            if card.element in group1:
-                g1 += card.attack
-            if card.element in group2:
-                g2 += card.attack
-            if card.element in group3:
-                g3 += card.attack
-    rel = [elem/(g1+g2+g3) for elem in (g1, g2, g3)]
-
-    dmg_type_score = 1 - (sum([abs(elem - 0.33) for elem in rel]) / 133)
-    # </editor-fold>
-
-    # <editor-fold desc="dmg distribution (axie + types) has every axie every type of damage?">
-    axie_points = [0 for _ in range(3)]
-    for ii, axie in enumerate(team):
-        if axie.element in group1:
-            for card in axie.cards:
-                if card.attack >= 50 and (card in group1 or card in group2):
-                    axie_points[ii] += 1
-        elif axie.element in group2:
-            for card in axie.cards:
-                if card.attack >= 50 and (card in group2 or card in group3):
-                    axie_points[ii] += 1
-        elif axie.element in group3:
-            for card in axie.cards:
-                if card.attack >= 50 and (card in group3 or card in group1):
-                    axie_points[ii] += 1
-    # only use assumtion of 3 dmg cards per axie to not rule out utility cards
-    dmg_distribution_score = sum([min(1.0, axie_points[ii] / 3) for ii in range(3)]) / 3
-    # </editor-fold>
-
-    # shield distribution
-    ...
-
-    # energy gain
-    ...
-
-    # energy steal
-    ...
-
-    # backdoors (types)
-    ...
-
-    # draw power
-    ...
-
-    # disables
-    ...
-
-    # buffs / debuffs
-    ...
-
-    # 1 zero cost per axie
-    ...
-
-    if plot:
-        data = [g1, g2, g3]
-        X = arange(3)
-
-        fig = plt.figure()
-        ax = fig.add_axes([0, 0, 1, 1])
-
-        ax.bar(X + 0.00, data[0], color='#006600', width=0.25)  # plant
-        ax.bar(X + 0.25, data[1], color='#996633', width=0.25)  # beast
-        ax.bar(X + 0.50, data[2], color='#0066cc', width=0.25)  # aqua
-
-        plt.tight_layout()
-        plt.show()
-
-
-def ladder_fitness_factory(top_ladder_limit=30, matches_per_matchup=30):
+def ladder_fitness_factory(top_ladder_limit=100, matches_per_matchup=1):
 
     #@timeit
     #@lru_cache()
@@ -179,7 +92,7 @@ def ladder_fitness_factory(top_ladder_limit=30, matches_per_matchup=30):
         #print("Calculating fitness for", v)
         stdout.write(".")
         fit = 0
-        for ladder_deck in sample(top_ladder_decks, top_ladder_limit):
+        for ladder_deck in sample(top_ladder_decks, min(len(top_ladder_decks), top_ladder_limit)):
             m = Match(v, ladder_deck)
             fit += sum([m.run_simulation() for _ in range(matches_per_matchup)]) / matches_per_matchup
         return fit
@@ -191,7 +104,7 @@ def ladder_fitness_factory(top_ladder_limit=30, matches_per_matchup=30):
         stdout.write(".")
         return sum(
             [sum([Match(v, ladder_deck).run_simulation() for _ in range(matches_per_matchup)]) / matches_per_matchup
-             for ladder_deck in sample(top_ladder_decks, top_ladder_limit)]
+             for ladder_deck in sample(top_ladder_decks, min(len(top_ladder_decks), top_ladder_limit))]
         ) / top_ladder_limit
 
     return fitness_against_top_ladder_comprehension
@@ -292,7 +205,7 @@ def get_premade_decks():
 # elem in tuple         no
 # bot agent greed       1       1
 ga = my_pyeasyga.GeneticAlgorithm(list(),
-                                  initial_population=Axie.get_genetically_complete_pop(5)+get_premade_decks(),
+                                  initial_population=Axie.get_genetically_complete_pop(5),
                                   # population_size=50,
                                   generations=100,
                                   crossover_probability=1,
@@ -305,7 +218,7 @@ population_fitness_table = None
 ga.create_individual = create_individual
 ga.crossover_function = crossover1
 ga.mutate_function = mutate
-ga.fitness_function = ladder_fitness_factory(top_ladder_limit=15, matches_per_matchup=26)
+ga.fitness_function = ladder_fitness_factory(top_ladder_limit=100, matches_per_matchup=1)
 """ga.on_generation = on_generation_factory(matchups_per_deck=0.7, matches_per_matchup=30,
                                          matchup_lim_fraction=0.8, method="v2")"""
 
@@ -330,4 +243,3 @@ finally:
         print(i.get_deck_string())
 
     ga.plot()
-

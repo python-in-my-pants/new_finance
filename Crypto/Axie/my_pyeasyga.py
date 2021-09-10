@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-    pyeasyga module
-
+TODO add generic plotting dict
+TODO plot most popular / best genes over populations
 """
 
 import random

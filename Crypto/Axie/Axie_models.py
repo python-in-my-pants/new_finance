@@ -4,13 +4,16 @@ from random import shuffle, sample, random, choice, randint
 from copy import deepcopy, copy as shallowcopy
 from functools import reduce
 from traceback import print_exc
-from itertools import permutations
+from itertools import permutations, combinations
 from matplotlib import pyplot as plt
 from numpy import linspace, pi, degrees, arange, asarray
+from pprint import pprint as pp
 import logging
 from Option_utility import get_timestamp
 from Buffs import Buffs
 from Utility import timeit
+from ISMCTS import ISMCTS, AxieGameState
+from MaxOp import MaxOp
 
 
 """
@@ -32,12 +35,12 @@ def setup_logger():
     root_logger.addHandler(handler)
 
 
-#setup_logger()
+# setup_logger()
 
 
 def debug(s=""):
-    #print(s)
-    #logging.debug(s)
+    print(s)
+    # logging.debug(s)
     pass
 
 
@@ -125,6 +128,8 @@ class Card(ABC):
 
         self.owner: Axie = None
 
+        self.card_id = id(self)
+
     def __str__(self):
         # return f'{type(self).__name__} ({self.cost}/{self.attack}/{self.defense})'
         return f'{self.card_name} ({self.cost}/{self.attack}/{self.defense})'
@@ -132,12 +137,20 @@ class Card(ABC):
     def __repr__(self):
         return self.__str__()
 
-    def __deepcopy__(self, memodict={}):  # do not deepcopy cards
-        tmp = self.owner
+    '''def __deepcopy__(self, memodict={}):  # do not deepcopy cards, omit reference back to owner in deepcopy
+
+        """cls = self.__class__
+        result = cls.__new__(cls)
+        memodict[id(self)] = result
+        for k, v in self.__dict__.items():
+            setattr(result, k, deepcopy(v, memodict))
+        return result"""
+
+        """tmp = self.owner
         self.owner = None
         to_ret = shallowcopy(self)
         self.owner = tmp
-        return to_ret
+        return to_ret"""'''
 
     def detail(self):
         return f'{self.card_name} - {self.part_name} ({self.body_part}, {self.range})\n\t' \
@@ -487,6 +500,8 @@ class Axie:
         self.shield = 0
         self.shield_broke_this_turn = False
 
+        self.axie_id = id(self)
+
     def __repr__(self):
         hp_stat = f'(H:{self.hp}+{int(self.shield)}/{self.base_hp}, S:{self.speed})' if self.alive() else f'(dead)'
         stand_stat = f'L {self.last_stand_ticks}'
@@ -544,14 +559,14 @@ class Axie:
             self.player.deck_pile = [card for card in self.player.deck_pile if card.owner.alive()]
             self.player.discard_pile = [card for card in self.player.discard_pile if card.owner.alive()]
 
-            debug(f'{self} died!')
-            debug("Hand discarded sucessfully!")
+            #debug(f'{self} died!')
+            #debug("Hand discarded sucessfully!")
         except KeyError as e:
             print(f'Key error in "on_death": {e}')
             print_exc()
             exit()
 
-    def apply_damage(self, battle, cards_to_play, attacker, atk, double_shield_dmg, true_dmg, atk_card):
+    def apply_damage(self, battle, cards_to_play, attacker, atk, double_shield_dmg, true_dmg, atk_card, verbose=False):
 
         if not self.alive():
             return
@@ -566,18 +581,24 @@ class Axie:
         self.shield = int(self.shield)
         inflicted_dmg = 0
 
-        debug(f'\tATK: {atk}')
-
-        """if "sleep" in self.buffs.keys() and self.buffs["sleep"][0] > 0:
-            sleep = True
-            self.reduce_stat_eff("sleep", "all")"""
+        if verbose:
+            debug(f'\tATK: {atk}')
 
         # on pre last stand
         for _card in fctp:
             block_last_stand = block_last_stand or _card.on_pre_last_stand(battle, cards_to_play, attacker, self)
 
+        on_dmg_call_counter = 0
+
         def on_dmg_infl():
-            debug(f'Damage inflicted: {orig_atk}')
+            nonlocal on_dmg_call_counter
+            on_dmg_call_counter += 1
+            if on_dmg_call_counter > 1:
+                from traceback import print_exc
+                print_exc()
+                raise RuntimeError("on_dmg_inflicted called more than once")
+            if verbose:
+                debug(f'Damage inflicted: {orig_atk}')
             if atk_card:
                 for c in fctp:
                     c.on_damage_inflicted(battle, cards_to_play, attacker, self, orig_atk, atk_card)
@@ -585,35 +606,43 @@ class Axie:
         if self.last_stand:
 
             if end_last_stand:
+
                 self.last_stand = False
                 self.last_stand_ticks = 0
-                debug("Last stand ended by effect")
+
+                on_dmg_infl()
+
+                self.on_death()
+
+                if verbose:
+                    debug("Last stand ended by effect")
             else:
 
                 self.last_stand_ticks -= 1
-                inflicted_dmg += atk
-                on_dmg_infl()
 
                 if self.last_stand_ticks <= 0:
                     self.last_stand = False  # ded
+
+                    on_dmg_infl()
+
                     self.on_death()
-                    return
+
+            return
 
         # handle shield
-        elif not true_dmg and not sleep and self.shield > 0:
+        if not true_dmg and not sleep and self.shield > 0:
 
             # shield break
             if (double_shield_dmg and atk * 2 >= self.shield) or atk >= self.shield:
 
                 if double_shield_dmg:
                     atk -= int(self.shield / 2)
-                    inflicted_dmg += int(self.shield / 2)
                 else:
                     atk -= self.shield
-                    inflicted_dmg += self.shield
                 self.shield = 0
 
-                debug(f'Shield broke')
+                if verbose:
+                    debug(f'Shield broke')
 
                 block_additional_dmg = False
 
@@ -627,17 +656,17 @@ class Axie:
             else:  # shield not breaking
 
                 rem_shield = max(0, self.shield - atk)
-                inflicted_dmg = atk
+
                 if double_shield_dmg:
                     atk -= int(self.shield / 2)
                 else:
                     atk -= self.shield
+
                 self.shield = rem_shield
                 on_dmg_infl()
                 return
 
         # after shield break
-
         # last stand? TODO not working yet????
         if not block_last_stand and self.hp - atk < 0 and atk - self.hp < self.hp * self.morale * morale_multi / 100:
 
@@ -742,49 +771,6 @@ class Axie:
     def apply_stat_eff(self, eff, data):
         self.buffs.add(eff, data)
 
-    """def apply_stat_eff(self, effect, times=1, turns=0):
-        # which effects stack? if 2x fear for "next turn" does it stack to 2?
-
-        
-        TODO this is inaccurate because new stacks falsely extend the duration of old stacks
-        :param effect: effect name, e.g. aroma
-        :param times: stacks to apply, e.g. poison
-        :param turns: 0 = until next turn, 1 = for next turn, 2 = for next 2 turns
-        :return:
-        
-
-        stacking = {"attack up", "attack down", "morale up", "morale down", "speed up", "speed down", "poison"}
-        only_for_next_round = {"jinx"}
-
-        # effects that don't decay over time
-        if effect in ("poison", "stun", "attack up", "attack down", "fragile", "lethal"):
-            turns = 10000
-
-        _times, _turns = self.buffs.get(effect, (0, 0))
-        if effect in only_for_next_round:
-            self.buff_q.update({effect: (1, turns)})
-            return
-        if effect not in stacking:
-            self.buffs.update({effect: (1, max(_turns, turns))})
-            return
-        else:
-            self.buffs.update({effect: (times + _times, max(_turns, turns))})
-            return"""
-
-    """def reduce_stat_eff(self, effect, stacks):
-
-        def f():
-            nonlocal stacks
-            s, rounds = self.buffs.get(effect, (0, 0))
-            if stacks == "all":
-                stacks = s
-            if rounds > 1000 and s-stacks <= 0:  # TODO NEW
-                del self.buffs[effect]
-                return
-            self.buffs[effect] = (s-stacks, rounds)
-
-        self.apply_stat_eff_changes.append(f)"""
-
     def alive(self):
         return self.hp > 0 or self.last_stand
 
@@ -874,13 +860,40 @@ class Player:
         self.greedy = greedy
 
         for axie in team:
-            self.deck += list(axie.cards) + list(axie.cards)
+            # deepcopy bc otherwise changes to one copy of the card affect the other copy
+            self.deck += list(axie.cards) + deepcopy(list(axie.cards))
             axie.player = self
 
         self.energy = self.start_energy
         self.deck_pile = shallowcopy(self.deck)
         self.discard_pile = list()
         self.hand = dict()
+
+        self.player_id = id(self)
+        self.verbose = True
+
+    def __repr__(self):
+        return f'Player #{str(id(self))[-4:]}'
+
+    def __hash__(self):
+        return self.player_id
+
+    def as_tuple(self, with_elem=False):
+        if with_elem:
+            return tuple(
+                flatten([[axie.element] + sorted([card.card_name for card in axie.cards]) for axie in self.team]))
+        return tuple(flatten([sorted([card.card_name for card in axie.cards]) for axie in self.team]))
+
+    def diff(self, other, with_elem=False):
+        t1 = self.as_tuple(with_elem=with_elem)
+        t2 = other.as_tuple(with_elem=with_elem)
+        d = sum([len(set(t1[i:i + (len(t1) // len(self.team))]).difference(set(t2[i:i + (len(t2) // len(self.team))])))
+                 for i in range(len(self.team))])
+        return d / len(t1)
+
+        """
+        return sum([a != b for a, b in zip(self.as_tuple(with_elem=with_elem), other.as_tuple(with_elem=with_elem))]) /\
+            len(self.as_tuple(with_elem=with_elem))"""
 
     def reset(self):
         for axie in self.team:
@@ -902,29 +915,6 @@ class Player:
         for axie in self.team:
             s += axie.long() + "\n\t"
         return s[:-1]
-
-    def __repr__(self):
-        return f'Player #{str(id(self))[-4:]}'
-
-    def as_tuple(self, with_elem=False):
-        if with_elem:
-            return tuple(
-                flatten([[axie.element] + sorted([card.card_name for card in axie.cards]) for axie in self.team]))
-        return tuple(flatten([sorted([card.card_name for card in axie.cards]) for axie in self.team]))
-
-    def diff(self, other, with_elem=False):
-        t1 = self.as_tuple(with_elem=with_elem)
-        t2 = other.as_tuple(with_elem=with_elem)
-        d = sum([len(set(t1[i:i + (len(t1) // len(self.team))]).difference(set(t2[i:i + (len(t2) // len(self.team))])))
-                 for i in range(len(self.team))])
-        return d / len(t1)
-
-        """
-        return sum([a != b for a, b in zip(self.as_tuple(with_elem=with_elem), other.as_tuple(with_elem=with_elem))]) /\
-            len(self.as_tuple(with_elem=with_elem))"""
-
-    def __hash__(self):
-        return id(self)
 
     def start_turn(self, cards_per_turn, energy_per_turn):
 
@@ -965,8 +955,9 @@ class Player:
                 debug("Index error while trying to draw")
                 pass  # this happens if we have many cards in hand while the deck & dc pile are thin
 
-        tmp = {owner: self.hand.get(owner, list()) + [c for c in drawn_cards if c.owner == owner] for owner in
-               self.team}
+        # was c.owner == owner
+        tmp = {owner: self.hand.get(owner, list()) + [c for c in drawn_cards if c.owner is owner]
+               for owner in self.team}
         self.hand.update(tmp)
 
         hand_cards = reduce(lambda x, y: x + y, list(self.hand.values()))
@@ -975,12 +966,14 @@ class Player:
             self.random_discard()
             hand_cards = reduce(lambda x, y: x + y, list(self.hand.values()))
 
-        if len(hand_cards) + len(self.deck_pile) + len(self.discard_pile) != sum(
-                map(lambda xe: xe.alive(), self.team)) * 8:
-            print("Something went wrong!")
+        if len(hand_cards) + len(self.deck_pile) + len(self.discard_pile) != \
+                sum(map(lambda xe: xe.alive(), self.team)) * 8:
+
+            print("Something went wrong for player", str(self))
             print(f'Hand cards: {len(hand_cards)} Deck pile: {len(self.deck_pile)} Disc pile: {len(self.discard_pile)}')
             print("Card sum is wrong! Should be", sum(map(lambda xe: xe.alive(), self.team)) * 8, "but is",
                   len(hand_cards) + len(self.deck_pile) + len(self.discard_pile))
+
             for c in drawn_cards:
                 print(c, c.owner)
             print()
@@ -988,117 +981,146 @@ class Player:
                 print(c)
             print(self)
             exit(-1)
-        debug(f'Hand:         {hand_cards} ({len(hand_cards)})')
-        debug(f'Discard pile: ({len(self.discard_pile)})')
-        debug(f'Deck pile:    ({len(self.deck_pile)})')
-        for k, v in self.hand.items():
-            debug(f'{k}: {v}')
-        debug()
+
+        if self.verbose:
+            debug(f'Hand:         {hand_cards} ({len(hand_cards)})')
+            debug(f'Discard pile: ({len(self.discard_pile)})')
+            debug(f'Deck pile:    ({len(self.deck_pile)})')
+            for k, v in self.hand.items():
+                debug(f'{k}: {v}')
+            debug()
 
     def gain_energy(self, amount):
         self.energy = max(min(10, self.energy + amount), 0)
 
     def select_cards(self, game_state) -> Dict:
-        for axie in self.team:
-            if axie.alive():
-                for dis, stacks, in axie.disabilities.items():
-                    debug(f'Disabled: {dis} for {stacks} rounds')
-                    
-        return self.apply_selection(self.agent.select(self, game_state)) if self.agent else self.random_select(
-            game_state)
-    
-    def get_many_possible_moves(self):
+        if self.verbose:
+            for axie in self.team:
+                if axie.alive():
+                    for dis, stacks, in axie.disabilities.items():
+                        debug(f'Disabled: {dis} for {stacks} rounds')
+
+        return self.apply_selection(self.agent.select(self, game_state)) if self.agent else \
+            self.new_random_select()
+
+    def get_all_possible_moves(self, use_permutations=False):
         """
-        :param game_state: 
-        :return: many legal moves the player can make, given by a dict {axie: cards_played}
+        :return: all legal moves the player can make, given by a list of dicts {axie: cards_played}
         """
 
         # randomly choose an energy limit
-        energy_limit = int(random() * self.energy)
-        energy_used = 0
+        energy_limit = self.energy
+        living_axies = [a for a in self.team if a.alive() and self.hand.get(a, None)]
 
-        def get_all_single_hand_selections(axie_hand, e_lim):
+        if not living_axies:
+            return []
+
+        def get_all_single_hand_selections_w_permutations(axie_hand, e_lim):
             """
             :param axie_hand:
             :param e_lim:
             :return: list of tuples (selected_cards_in_selected_order, cum_cost)
             """
-            possible_selections = []
-            for selection_len in range(5):
-                for possible_sel in permutations(axie_hand, selection_len):
-                    c = sum([c.cost for c in possible_sel])
-                    if c <= e_lim:
-                        possible_selections.append((possible_sel, c))
-            return possible_selections
-
-        def get_random_selection_from_single_axie_hand(axie_hand, lim):
-            cards_to_select = sample(axie_hand, randint(0, 4))
-            while sum([c.cost for c in cards_to_select]) > lim:
-                cards_to_select = sample(axie_hand, randint(0, 4))
-            return cards_to_select, sum([c.cost for c in cards_to_select])
-
-        final_selection = {axie: [] for axie in self.team}
-        shuffled_hand = shuffle([(owner,
-                                  [card for card in cards if card.element not in card.owner.disabilities and
-                                                             card.part not in card.owner.disabilities])
-                                 for owner, cards in self.hand.items()])
-
-        for axie, a_hand in shuffled_hand:
-
-            if energy_used <= energy_limit:
-                sel, cost = get_random_selection_from_single_axie_hand(a_hand, energy_limit-energy_used)
-                final_selection[axie] = sel
-                energy_used += cost
-
-        return final_selection
-
-    # TODO
-    def get_all_possible_moves(self):
-        """
-        :return: many legal moves the player can make, given by a dict {axie: cards_played}
-        """
-
-        # randomly choose an energy limit
-        energy_limit = int(random() * self.energy)
-        energy_used = 0
-
-        def get_all_single_hand_selections(axie_hand, e_lim):
-            """
-            :param axie_hand:
-            :param e_lim:
-            :return: list of tuples (selected_cards_in_selected_order, cum_cost)
-            """
-            # if owner is dead, return empty list
             if axie_hand and not axie_hand[0].owner.alive():
-                return []
+                raise RuntimeError("Trying to get moves for dead axie")
 
-            possible_selections = []
-            for selection_len in range(min(len(axie_hand), 5)):
-                for possible_sel in permutations(axie_hand, selection_len):
+            possible_selections = set()
+            for selection_len in range(min(len(axie_hand)+1, 5)):
+                for possible_sel in set(permutations(axie_hand, selection_len)):
                     c = sum([c.cost for c in possible_sel])
                     if c <= e_lim:
-                        possible_selections.append((possible_sel, c))
+                        possible_selections.add((tuple(possible_sel), c))
             return possible_selections
 
-        final_selection = {axie: [] for axie in self.team}
-        shuffled_hand = shuffle([(owner,
-                                  [card for card in cards if card.element not in card.owner.disabilities and
-                                   card.part not in card.owner.disabilities])
-                                 for owner, cards in self.hand.items()])
+        def get_all_single_hand_selections_w_combinations(axie_hand, e_lim):
+            """
+            :param axie_hand:
+            :param e_lim:
+            :return: list of tuples (selected_cards_in_selected_order, cum_cost)
+            """
+            if axie_hand and not axie_hand[0].owner.alive():
+                raise RuntimeError("Trying to get moves for dead axie")
 
-        single_hand_selections = [get_all_single_hand_selections(self.hand[axie], energy_limit) for axie in self.team]
+            possible_selections = set()
+            for selection_len in range(min(len(axie_hand)+1, 5)):
+                for possible_sel in set(combinations(axie_hand, selection_len)):
+                    c = sum([c.cost for c in possible_sel])
+                    if c <= e_lim:
+                        possible_selections.add((tuple(possible_sel), c))
+            return possible_selections
 
-        for hand_1_selection in single_hand_selections[0]:
+        def shuffle_w_copy(to_shuffle):
+            shuffle(to_shuffle)
+            return to_shuffle
 
-            for hand_2_selection in single_hand_selections[1]:
+        final_selection = []
+        useable_hand = {
+            owner: shuffle_w_copy([card for card in cards if card.element not in card.owner.disabilities.keys() and
+                                   card.body_part not in card.owner.disabilities.keys() and
+                                   card.range not in card.owner.disabilities.keys() and
+                                   card.owner.alive()])
+            for owner, cards in self.hand.items()
+        }
 
-                ...
+        #pp(useable_hand)
+        #print("Energy limit:", energy_limit)
 
+        single_hand_selections = {
+            axie: get_all_single_hand_selections_w_permutations(useable_hand[axie], energy_limit) if use_permutations
+                  else get_all_single_hand_selections_w_combinations(useable_hand[axie], energy_limit)
+            for axie in living_axies
+        }
 
+        move = {axie: [] for axie in living_axies}
+        final_selection.append(move)
+        energy_used = 0
+
+        for hand_1_selection, hand_1_cost in single_hand_selections[living_axies[0]]:
+
+            if hand_1_selection:
+                energy_used = hand_1_cost
+
+                # reset move to this to clear out values for other team members from previous iterations
+                move = {axie: [] for axie in living_axies}
+                move.update({living_axies[0]: hand_1_selection})
+
+                final_selection.append(move)
+
+            if len(living_axies) > 1:
+
+                for hand_2_selection, hand_2_cost in [(sel, cos) for sel, cos in single_hand_selections[living_axies[1]]
+                                                      if energy_used+cos <= energy_limit]:
+
+                    if hand_2_selection:
+                        energy_used = hand_1_cost + hand_2_cost
+
+                        move = {axie: [] for axie in living_axies}
+                        move.update({living_axies[0]: hand_1_selection, living_axies[1]: hand_2_selection})
+
+                        final_selection.append(move)
+
+                    if len(living_axies) > 2:
+
+                        for hand_3_selection, hand_3_cost in [(sel, cos) for sel, cos in single_hand_selections[living_axies[2]] if
+                                                              energy_used+cos <= energy_limit]:
+
+                            if hand_3_selection:
+                                m = shallowcopy(move)
+                                m.update({living_axies[2]: hand_3_selection})
+                                final_selection.append(m)
 
         return final_selection
 
     def apply_selection(self, cards_picked) -> dict:
+
+        if cards_picked == dict():
+            return cards_picked
+
+        if cards_picked is None:
+            raise RuntimeError("A player card selection returned None")
+
+        if set(cards_picked.keys())-set(self.hand.keys()):
+            raise RuntimeError(f"Axies in selection do not match {self} team")
 
         # check if selection is ok
         used_energy = 0
@@ -1114,22 +1136,25 @@ class Player:
 
         # apply it to game state
 
-        cards_to_play = {axie: [] for axie in self.hand.keys()}  # to be returned)
-
         for c in flatten(cards_picked.values()):
-            # put into return dict
-            cards_to_play[c.owner].append(c)
 
-            # remove card from hand
-            self.hand[c.owner].remove(c)
+            try:# remove card from hand
+                self.hand[c.owner].remove(c)
+            except:
+                pass
 
-        debug(f'\tCards to play: {[(str(id(axie))[-4:], card) for axie, card in cards_to_play.items()]}')
-        debug(f'\tUsed energy: {used_energy}, Energy remaining: {self.energy - used_energy}')
-        debug(f'\tTeam order: {[a for a in self.team]}')
+            # add to discard pile
+            self.discard_pile.append(c)
+
+        if self.verbose:
+            debug(f'{self}:')
+            debug(f'\tCards to play: {[(str(id(axie))[-4:], card) for axie, card in cards_picked.items()]}')
+            debug(f'\tUsed energy: {used_energy}, Energy remaining: {self.energy - used_energy}')
+            debug(f'\tTeam order: {[a for a in self.team]}')
 
         self.gain_energy(-used_energy)
 
-        return cards_to_play
+        return cards_picked
 
     def random_select(self, game_state) -> Dict:
 
@@ -1158,6 +1183,8 @@ class Player:
                 cards_to_play[hand_cards[c].owner].append(hand_cards[c])
                 # remove card from hand
                 self.hand[hand_cards[c].owner].remove(hand_cards[c])
+                # add to discard pile
+                self.discard_pile.append(c)
                 # remember energy
                 used_energy += hand_cards[c].cost
                 # count cards per axie
@@ -1168,14 +1195,52 @@ class Player:
         # use up all energy used by cards
         self.gain_energy(-used_energy)
 
-        debug(f'\tCards to play: {[(str(id(axie))[-4:], card) for axie, card in cards_to_play.items()]}')
-        debug(f'\tUsed energy: {used_energy}, Energy remaining: {energy_this_turn - used_energy}')
-        debug(f'\tTeam order: {[a for a in self.team]}')
+        if self.verbose:
+            debug(f'\tCards to play: {[(str(id(axie))[-4:], card) for axie, card in cards_to_play.items()]}')
+            debug(f'\tUsed energy: {used_energy}, Energy remaining: {energy_this_turn - used_energy}')
+            debug(f'\tTeam order: {[a for a in self.team]}')
 
         return cards_to_play
 
+    def new_random_select(self):
+        m = self.get_all_possible_moves()
+        if m:
+            return self.apply_selection(choice(m))
+        else:
+            return dict()
+
     def get_relative_team_hp(self):
         return sum([float(axie.hp) / float(axie.base_hp) for axie in self.team]) / len(self.team)
+
+    @timeit
+    def evaluate_against_top_ladder(self, games_per_matchup=1, agent=None, verbose=False):
+
+        native_agent = self.agent
+        if agent:
+            self.agent = agent
+
+        top_ladder = Player.get_top_ladder_decks()
+
+        if verbose:
+            print(f'Starting evaluation of deck against top ladder decks:')
+            for axie in self.team:
+                print(f'{axie.long()}')
+            print()
+            print(f'Top ladder decks: {len(top_ladder)}, Matches per matchup: {games_per_matchup} '
+                  f'=> {len(top_ladder) * games_per_matchup} games being simulated')
+
+        results = []
+        for ladder_deck in top_ladder:
+            m = Match(self, ladder_deck)
+            results.append(sum([m.run_simulation() for _ in range(games_per_matchup)]) / games_per_matchup)
+            if verbose:
+                t = len(results) / len(top_ladder)
+                print(f'{len(results)*games_per_matchup} / {len(top_ladder)*games_per_matchup} ({t*100:.2f} %) done')
+
+        if agent:
+            self.agent = native_agent
+
+        return sum(results) / len(results)
 
     # plotting & deck stats
 
@@ -1250,7 +1315,7 @@ class Player:
         # add hints in case of shortcomings in certain categories
         hints = []  # (importance, hint)
 
-        results["hp_score"] = sum([axie.hp/Axie.hp_multi for axie in self.team]) / 183
+        results["hp_score"] = sum([axie.hp / Axie.hp_multi for axie in self.team]) / 183
         raw_data["hp"] = {
             "team": sum([xe.hp for xe in self.team]),
             "front": self.team[0].base_hp,
@@ -1343,10 +1408,11 @@ class Player:
 
         Player.bar_plot_dmg_types_distribution(ax4, "Top ladder: Damage types/shield",
                                                Player.dmg_types_to_plot_format(top_ladder_raw_data["dmg_per_elem"],
-                                                                               top_ladder_raw_data["shield_distribution"],
+                                                                               top_ladder_raw_data[
+                                                                                   "shield_distribution"],
                                                                                top_ladder_raw_data["hp"]))
 
-        #plt.get_current_fig_manager().window.showMaximized()
+        # plt.get_current_fig_manager().window.showMaximized()
         fig.tight_layout()
         plt.tight_layout()
 
@@ -1358,7 +1424,8 @@ class Player:
         dmg_type_per_axie = deck_dmg_types["per_axie"]
 
         return [
-            [deck_dmg_types["plant/reptile"], dmg_type_per_axie[0][0], dmg_type_per_axie[1][0], dmg_type_per_axie[2][0]],
+            [deck_dmg_types["plant/reptile"], dmg_type_per_axie[0][0], dmg_type_per_axie[1][0],
+             dmg_type_per_axie[2][0]],
             [deck_dmg_types["aqua/bird"], dmg_type_per_axie[0][1], dmg_type_per_axie[1][1], dmg_type_per_axie[2][1]],
             [deck_dmg_types["beast/bug"], dmg_type_per_axie[0][2], dmg_type_per_axie[1][2], dmg_type_per_axie[2][2]],
             [xe.element for xe in team] if team else ["N/A" for _ in range(3)],
@@ -1389,7 +1456,7 @@ class Player:
         X = arange(4)
 
         axes.set_title(name)
-        #axes.get_xaxis().set_visible(False)
+        # axes.get_xaxis().set_visible(False)
 
         from pprint import pprint as pp
         pp(data)
@@ -1410,7 +1477,6 @@ class Player:
         axes.set_xticklabels(["Team", "Front", "Mid", "Back"])
 
         axes.legend(fancybox=True, shadow=True)
-
 
         """rects = axes.patches
         labels = ["Front", "Mid", "Back"]
@@ -1445,7 +1511,7 @@ class Player:
 
         # ---------------------------------------------
 
-        label_loc = linspace(start=0, stop=2*pi, num=len(categories))
+        label_loc = linspace(start=0, stop=2 * pi, num=len(categories))
         axes.set_title(name, y=1.05)
 
         lines, labels = axes.set_thetagrids(degrees(label_loc), labels=categories)
@@ -1481,77 +1547,97 @@ class Match:
     start_hand = 6
     energy_per_turn = 2
 
-    def __init__(self, player1, player2):
+    def __init__(self, player1, player2, on_turn=None):
         self.player1 = player1
         self.player2 = player2
+        self.on_turn = on_turn
         self.round = 0
         self.chain_cards = []  # cards chained with currently resolving card
         self.axies_in_attack_order = None
+        self.verbose = True
 
+    def __deepcopy__(self, memodict={}):
+        p1_clone = deepcopy(self.player1)
+        p1_clone.player_id = self.player1.player_id
+        p1_clone.verbose = False
+
+        p2_clone = deepcopy(self.player2)
+        p2_clone.player_id = self.player2.player_id
+        p2_clone.verbose = False
+
+        clone = Match(p1_clone, p2_clone)
+        clone.round = self.round
+        clone.chain_cards = deepcopy(self.chain_cards)
+        clone.axies_in_attack_order = deepcopy(self.axies_in_attack_order)
+        clone.verbose = False
+        return clone
+
+    @timeit
     def run_simulation(self):
 
-        debug(f'Starting simulation [{self.player1} vs. {self.player2}]')
+        if self.verbose:
+            debug(f'Starting simulation [{self.player1} vs. {self.player2}]')
 
         self.player1.reset()
         self.player2.reset()
         self.round = 1
 
-        debug("\nPlayer teams:")
+        if self.verbose:
+            debug("\nPlayer teams:")
 
-        for axie in self.player1.team:
-            debug(f'{axie.long()}')
-        debug()
-        for axie in self.player2.team:
-            debug(f'{axie.long()}')
+            for axie in self.player1.team:
+                debug(f'{axie.long()}')
+            debug()
+            for axie in self.player2.team:
+                debug(f'{axie.long()}')
 
-        debug()
-
-        round_counter = 0
+            debug()
 
         while self.game_running():
-            self.run_round(round_counter)
-            debug(f'\nRound {round_counter + 1} finished\n')
-            round_counter += 1
+            self.run_round()
+            if self.verbose:
+                debug(f'\nRound {self.round-1} finished\n')
 
         res = self.get_result()
 
         self.player1.reset()
         self.player2.reset()
-        self.round = 0
+        self.round = 1
 
         return res
 
     def game_running(self):
         return self.player1.team_alive() and self.player2.team_alive()
 
-    def run_round(self, round_counter):
+    def run_round(self):  # had round_counter as arg
 
-        # tODO if round > sth apply auto dmg to axies
-        if round_counter >= 10:
+        if self.round >= 10:
             for axie in self.player1.team + self.player2.team:
                 if axie.alive():
-                    axie.change_hp(-((round_counter - 10) * 30 + 20))
+                    axie.change_hp(-((self.round - 10) * 30 + 20))
 
             if not self.game_running():
                 return
 
         # start round, reset shield to 0, remove buffs/debuffs \ poison, draw cards
-        debug("Player 1 hand:")
-        self.player1.start_turn(self.cards_per_round if round_counter > 0 else self.start_hand,
-                                self.energy_per_turn if round_counter > 0 else 0)
-        debug("Player 2 hand:")
-        self.player2.start_turn(self.cards_per_round if round_counter > 0 else self.start_hand,
-                                self.energy_per_turn if round_counter > 0 else 0)
+        if self.verbose:
+            debug("Player 1 hand:")
+        self.player1.start_turn(self.cards_per_round if self.round > 1 else self.start_hand,
+                                self.energy_per_turn if self.round > 1 else 0)
+        if self.verbose:
+            debug("Player 2 hand:")
+        self.player2.start_turn(self.cards_per_round if self.round > 1 else self.start_hand,
+                                self.energy_per_turn if self.round > 1 else 0)
 
-        debug("Player 1 cards:")
+        if self.on_turn:
+            self.on_turn(self)
+
+        if self.verbose:
+            debug("Player 1 cards:")
         cards_p1 = self.player1.select_cards(self)
-        debug("\nPlayer 2 cards:")
+        if self.verbose:
+            debug("\nPlayer 2 cards:")
         cards_p2 = self.player2.select_cards(self)
-
-        for card in cards_p1.values():
-            self.player1.discard_pile += card
-        for card in cards_p2.values():
-            self.player2.discard_pile += card
 
         cards_p1.update(cards_p2)
 
@@ -1561,6 +1647,8 @@ class Match:
             if axie.alive():
                 axie.shield_broke_this_turn = False
 
+        self.round += 1
+
     def get_result(self):
 
         """
@@ -1568,15 +1656,18 @@ class Match:
         """
 
         if not (self.player1.team_alive() or self.player2.team_alive()):
-            debug("Game ended in a draw")
+            if self.verbose:
+                debug("Game ended in a draw")
             return 0  # draw
 
         if self.player1.team_alive():
-            debug("Player 1 wins!")
+            if self.verbose:
+                debug("Player 1 wins!")
             return self.player1.get_relative_team_hp()
 
         if self.player2.team_alive():
-            debug("Player 2 wins!")
+            if self.verbose:
+                debug("Player 2 wins!")
             return -self.player2.get_relative_team_hp()
 
     def fight(self, cards_to_play):
@@ -1590,10 +1681,12 @@ class Match:
         if not self.axies_in_attack_order:
             return
 
-        debug(f'\nAxies in attack order:')
+        if self.verbose:
+            debug(f'\nAxies in attack order:')
         for x in self.axies_in_attack_order:
-            t = "\t" if x.player is self.player1 else "\t\t"
-            debug(f'{t}{x}: {cards_to_play[x]}')
+            t = "\t" if x.player is self.player1 else "\t----"
+            if self.verbose:
+                debug(f'{t}{x}: {cards_to_play[x]}')
 
         for card in flat_cards_to_play:
             card.on_start_turn(self, cards_to_play)
@@ -1610,21 +1703,22 @@ class Match:
 
                     if shield_to_give > 0:
 
-                        debug()
+                        #debug()
 
                         # element bonus
                         if axie.element == card.element:
                             shield_mult += 0.1
-                            debug(f'Shield mult raised by 0.1 due to element synergy')
+                            #debug(f'Shield mult raised by 0.1 due to element synergy')
 
                         # if the card is in a chain with another of same element
-                        if card.element in [c.element for c in flatten([cards_to_play[xe] for xe in axie.player.team])]:
+                        if card.element in [c.element for c in flatten([cards_to_play.get(xe, [])
+                                                                        for xe in axie.player.team])]:
                             shield_mult += 0.05
-                            debug(f'\nShield mult raised by 0.05 due to chain bonus')
+                            #debug(f'\nShield mult raised by 0.05 due to chain bonus')
 
                         axie.shield += int(shield_mult * shield_to_give)
-                        debug(f'{axie} shield raised by {shield_mult:.2f} * {shield_to_give} = '
-                              f'{int(shield_mult * shield_to_give)}')
+                        #debug(f'{axie} shield raised by {shield_mult:.2f} * {shield_to_give} = '
+                        #      f'{int(shield_mult * shield_to_give)}')
 
         for axie in self.axies_in_attack_order:
 
@@ -1633,12 +1727,14 @@ class Match:
 
             owner = None
             opp = None
-            if axie.player is self.player1:
+            if axie.player.player_id == self.player1.player_id:
                 owner = self.player1
                 opp = self.player2
-            if axie.player is self.player2:
+            elif axie.player.player_id == self.player2.player_id:
                 owner = self.player2
                 opp = self.player1
+            else:
+                raise RuntimeError("Player objects did change")
 
             # ----------------------------------------------------
 
@@ -1652,7 +1748,7 @@ class Match:
                     _omit, _focus = _c.on_target_select(self, cards_to_play, axie, opp.team[0])
                     to_omit.union(_omit)
                     focus = _focus + focus
-                    
+
                 # status effects
                 """for xe in opp.team:
                     if xe.alive():
@@ -1689,11 +1785,13 @@ class Match:
             # select attack target
             attack_target = select_attack_target()
 
-            debug("_" * 350)
-            debug(f'\n>>{axie}<<\nattacking\n>>{attack_target}<<\nwith\n{cards_to_play[axie]}\n')
+            if self.verbose:
+                debug("_" * 350)
+                debug(f'\n>>{axie}<<\nattacking\n>>{attack_target}<<\nwith\n{cards_to_play[axie]}\n')
 
             def perform_attack(attacking_card, attacker, defender):
-                debug(f'Resolving: [{attacking_card}]')
+                if self.verbose:
+                    debug(f'Resolving: [{attacking_card}]')
 
                 base_atk = attacking_card.attack
                 atk_multi = 1
@@ -1706,7 +1804,8 @@ class Match:
                     debug(f'Skipping damage calculation because attacker is feared')"""
                 if not attacker.buffs.can_hit():
                     skip_dmg_calc = True
-                    debug(f'Skipping damage calculation because attacker is feared/stunned')
+                    if self.verbose:
+                        debug(f'Skipping damage calculation because attacker is feared/stunned')
 
                 if not skip_dmg_calc and attack_target and attack_target.alive():
 
@@ -1720,11 +1819,13 @@ class Match:
                     # element syn card / attacker
                     if attacking_card.element == attacker.element:
                         atk_multi += 0.1
-                        debug(f'Atk multi set to {atk_multi:.2f} due to element synergy')
+                        if self.verbose:
+                            debug(f'Atk multi set to {atk_multi:.2f} due to element synergy')
 
                     # element atk / def
                     atk_multi += get_dmg_bonus(attacking_card.element, defender.element)
-                    debug(f'Atk multi set to {atk_multi:.2f} due to rpc system')
+                    if self.verbose:
+                        debug(f'Atk multi set to {atk_multi:.2f} due to rpc system')
 
                     # buff / debuffs atk
                     """for buff, (stacks, rounds) in attacker.buffs.items():
@@ -1792,7 +1893,7 @@ class Match:
                         if _card is card:
                             y = _card.on_attack(self, cards_to_play, attacker, defender, card)
                             atk_multi += y
-                            if y != 0:
+                            if y != 0 and self.verbose:
                                 debug(f'Atk multi set to {atk_multi:.2f} due to {_card.part_name} effect')
 
                     # card effects def (only gecko right now?)
@@ -1804,7 +1905,8 @@ class Match:
                         combo_bonus = int(base_atk * atk_multi * attacker.skill / 500)
                     else:
                         combo_bonus = 0
-                    debug(f'Combo bonus: {combo_bonus}')
+                    if self.verbose:
+                        debug(f'Combo bonus: {combo_bonus}')
 
                     # calc damage now
                     atk = (base_atk * atk_multi + combo_bonus) * (1 - dmg_reduction)
@@ -1829,12 +1931,15 @@ class Match:
 
                             atk *= crit_multi
 
-                            debug(f'Critical hit for {int(atk)}')
+                            if self.verbose:
+                                debug(f'Critical hit for {int(atk)}')
 
-                        defender.apply_damage(self, cards_to_play, attacker, atk, double_shield_dmg, true_dmg, card)
+                        defender.apply_damage(self, cards_to_play, attacker, atk, double_shield_dmg, true_dmg, card,
+                                              verbose=self.verbose)
 
                     else:
-                        debug("Attack missed!")
+                        if self.verbose:
+                            debug("Attack missed!")
 
                         # tick actions
                         for xe in self.axies_in_attack_order:
@@ -1874,10 +1979,11 @@ class Match:
                         if self.game_running() and (attack_target.alive() or card.attack == 0):
                             missed = not perform_attack(card, axie, attack_target)
 
-                        debug(f'\tAttack target after attack: {attack_target}')
-                        debug(f'\t     Attacker after attack: {axie}\n')
+                        if self.verbose:
+                            debug(f'\tAttack target after attack: {attack_target}')
+                            debug(f'\t     Attacker after attack: {axie}\n')
 
-                    for xe in self.player1.team+self.player2.team:
+                    for xe in self.player1.team + self.player2.team:
                         if xe.alive():
                             xe.buffs.on_action()
 
@@ -1916,8 +2022,10 @@ class Match:
                     always_first.append(axie)
                     ranked_axies.remove(axie)
 
-
         return always_first + ranked_axies
+
+    def __repr__(self):
+        return f'Match({self.player1} vs. {self.player2}, round: {self.round})'
 
 
 class Agent(ABC):
@@ -1930,10 +2038,6 @@ class Agent(ABC):
         :param game_state:
         :return:
         """
-        pass
-
-    @abstractmethod
-    def sinle_select(self, player: Player, game_state: Match):
         pass
 
 
@@ -1961,5 +2065,38 @@ class HumanAgent(Agent):
         else:
             return {axie: [] for axie in player.team}
 
-    def sinle_select(self, game_state, player):
-        pass
+
+class ISMCTSAgent(Agent):
+
+    def __init__(self, itermax=1000):
+        self.itermax = itermax
+
+    def select(self, player: Player, game_state: Match) -> dict:
+        """
+        :param player:
+        :param game_state:
+        :return:
+        """
+        # print("ISMCTS agent starts thinking ...")
+        action = ISMCTS(AxieGameState(game_state), self.itermax)
+        # print("IS-MCTS selected:")
+        # pp(action)
+        return action
+
+
+class MaxOpAgent(Agent):
+
+    def __init__(self, lookahead=3, action_search_width=50, determinization_width=10, determinization_decay=0.3):
+        self.maxOpInstance = MaxOp()
+        self.lookahead = lookahead
+        self.action_search_width = action_search_width
+        self.determinization_width = determinization_width
+        self.determinization_decay = determinization_decay
+
+    def select(self, player: Player, game_state: Match) -> dict:
+        self.maxOpInstance.player = 1 if player.player_id == game_state.player1.player_id else 2
+        print(f'{self.maxOpInstance} starts thinking...')
+        action = self.maxOpInstance.get_action(game_state, self.lookahead,  self.action_search_width,
+                                               self.determinization_width, self.determinization_decay)
+        pp(action)
+        return action

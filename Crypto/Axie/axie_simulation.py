@@ -32,15 +32,139 @@ def single_fight():
     print(Match(p1, p2).run_simulation())
 
 
+def ai_show_battle():
+
+    p1 = Player.get_random(agent=MaxOpAgent(lookahead=1, action_search_width=50, determinization_width=20,
+                                            determinization_decay=0))
+    p2 = Player.get_random(agent=MaxOpAgent(lookahead=1, action_search_width=50,  determinization_width=20,
+                                            determinization_decay=0))
+    p2.team = deepcopy(p1.team)
+
+    results1 = []
+    results2 = []
+    results3 = []
+    results4 = []
+
+    def inner(match):
+        nonlocal results1, results2, results3, results4
+        t, o = p1.agent.maxOpInstance.evaluate_game_state(match)
+        results1.append(t)
+        results2.append(o)
+        t, o = p2.agent.maxOpInstance.evaluate_game_state(match)
+        results3.append(t)
+        results4.append(o)
+
+    m = Match(p1, p2, inner)
+
+    print(m.run_simulation())
+
+    plt.plot(range(len(results1)), results1, color="#ff9999", label="Team 1 status")
+    plt.plot(range(len(results2)), results2, color="#800000", label="Team 1 options")
+    plt.plot(range(len(results2)), [(a+b)/2 for a, b in zip(results1, results2)], "--",
+             color="#ff0000", label="State value 1")
+
+    plt.plot(range(len(results3)), results3, color="#b3b3ff", label="Team 2 status")
+    plt.plot(range(len(results4)), results4, color="#000080", label="Team 2 options")
+    plt.plot(range(len(results3)), [(a + b) / 2 for a, b in zip(results3, results4)], "--",
+             color="#0000ff", label="State value 2")
+
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
+def ai_vs_random():
+
+    p1 = Player.get_random(agent=MaxOpAgent(lookahead=1, action_search_width=50, determinization_width=20,
+                                            determinization_decay=0))
+    p2 = Player.get_random()
+
+    """print("Player 1 team:")
+    for axie in p1.team:
+        print(axie.long())
+
+    print("Player 2 team:")
+    for axie in p2.team:
+        print(axie.long())"""
+
+    m = Match(p1, p2)
+    results = [m.run_simulation() for _ in range(100)]
+
+    p1.agent = None
+    m2 = Match(p1, p2)
+    results2 = [m2.run_simulation() for _ in range(100)]
+
+    print(sum(results), sum(results2))
+
+    plt.plot(range(len(results)), results, label="AI")
+    plt.plot(range(len(results2)), results2, label="Random")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
+def team_status_test():
+
+    p1, p2 = Player.get_random(), Player.get_random()
+
+    results1 = []
+    results2 = []
+
+    def inner(match):
+        nonlocal results1, results2
+        results1.append(MaxOp.get_team_status(match.player1.team))
+        results2.append(MaxOp.get_team_status(match.player2.team))
+
+    m = Match(p1, p2, inner)
+    print(m.run_simulation())
+
+    plt.plot(range(len(results1)), results1, label="results 1")
+    plt.plot(range(len(results2)), results2, label="results 2")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
+def plot_action_width():
+
+    p1, p2 = Player.get_random(), Player.get_random()
+
+    actions1, actions2 = [], []
+    alive1, alive2 = [], []
+
+    def inner(match):
+        actions1.append(len(match.player1.get_all_possible_moves()))
+        actions2.append(len(match.player2.get_all_possible_moves()))
+        alive1.append(100*sum([1 for axie in match.player1.team if axie.alive()]))
+        alive2.append(100*sum([1 for axie in match.player2.team if axie.alive()]))
+
+    m = Match(p1, p2, inner)
+    print(m.run_simulation())
+
+    plt.plot(range(len(actions1)), actions1, label="actions 1")
+    plt.plot(range(len(actions2)), actions2, label="actions 2")
+    plt.plot(range(len(alive1)), alive1, label="alive 1")
+    plt.plot(range(len(alive2)), alive2, label="avlive 2")
+
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
 def plot_deck_stats_test():
 
-    # p = Player.from_team_ids([4358428, 2949043, 4557896])
-    p = Player.from_team_ids([1386868, 2949043, 4759059])
+    p = Player.from_team_ids([4358428, 2949043, 4557896])
+    # p = Player.from_team_ids([1386868, 2949043, 4759059])
 
     for xe in p.team:
         print(xe.long())
 
     p.plot_deck_stats_overview()
+
+
+def eval_against_top_ladder():
+    print(Player.from_team_ids([4358428, 2949043, 4557896]).\
+          evaluate_against_top_ladder(games_per_matchup=10, verbose=True))
 
 
 def match_significance():
@@ -56,7 +180,7 @@ def match_significance():
         results.append(sum([m.run_simulation() for _ in range(matches_per_matchup)]) / matches_per_matchup)
 
     s = sum([1 for r in results if abs(r) >= 0.1])
-    print(f'Result is significantly different from 0 (10%) in '
+    print(f'Average score of one random deck over another is significantly different from 0 (10%) in '
           f'{100 * s / len(results):.2f} % ({s}) of cases')
 
     plt.plot(sorted(results), range(len(results)))
@@ -103,11 +227,15 @@ def plot_vs_random():
 def human_fight_test(deck=None):
 
     hooman = HumanAgent()
-    p2 = Player.get_random()
+    ai = MaxOpAgent(lookahead=1, action_search_width=50, determinization_width=20,
+                    determinization_decay=0)
+
     if deck:
         p1 = Player(deck, hooman)
+        p2 = Player(deepcopy(deck), agent=ai)
     else:
         p1 = Player.get_random(hooman)
+        p2 = Player.get_random(agent=ai)
 
     print("Player 1 team:")
     for axie in p1.team:
@@ -250,9 +378,7 @@ def top_ladder_decks_test():
         print(p.as_tuple())
 
 
-"""human_fight_test([Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap()),
-                  Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap()),
-                  Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap())])"""
-
 if __name__ == "__main__":
-    plot_deck_stats_test()
+    human_fight_test([Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap()),
+                      Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap()),
+                      Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap())])

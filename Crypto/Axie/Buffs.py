@@ -42,6 +42,11 @@ class Buffs:
             "stun": False,  # is stunned
         }
 
+    def count_buffs(self):
+        return self.entries["attack up"] + \
+               sum(self.entries["morale up"].values()) + \
+               sum(self.entries["speed up"].values())
+
     def add(self, entry, data):
         if entry in self.stacks:
             self.entries[entry] += data

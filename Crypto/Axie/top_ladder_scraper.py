@@ -99,7 +99,7 @@ class SimpleAxieModel:
             f'Horn:\t{self.horn}\n\t'\
             f'Tail:\t{self.tail}\n\t'\
             f'Eyes:\t{self.eyes}\n\t'\
-            f'Ears:\t{self.ears}\n'
+            f'Ears:\t{self.ears}'
 
     def to_dict(self):
         return {
@@ -211,6 +211,7 @@ def get_top_100_decks(use_cached=True, limit=100):
             os.system("taskkill /f /im geckodriver.exe /T")
             os.system("taskkill /f /im chromedriver.exe /T")
             os.system("taskkill /f /im IEDriverServer.exe /T")
+            print("Tasks killed sucessfully")
         except Exception as e:
             pass
 
@@ -223,7 +224,7 @@ decks = get_top_100_decks(use_cached=True, limit=100)
 
 def show_as_df(deck_list):
     try:
-        with open("leaderboard_teams.pickle", "rb") as file:
+        with open("leaderboard_teams_df.pickle", "rb") as file:
             df = pickle.load(file)
     except Exception:
         full_decks = [deck for deck in deck_list if deck]
@@ -231,7 +232,7 @@ def show_as_df(deck_list):
         multi_ind = pd.MultiIndex.from_tuples(ind, names=["Deck", "Axie"])
         df = pd.DataFrame.from_records([axie.to_dict() for axie in flatten(full_decks)], index=multi_ind)
 
-        with open("leaderboard_teams.pickle", "wb") as file:
+        with open("leaderboard_teams_df.pickle", "wb") as file:
             pickle.dump(df, file)
 
     print(df)
@@ -360,10 +361,13 @@ def get_best_card_combs(axies):
     return r
 
 
+def get_decks_with_axies_with_cards(cards):
+    return ...
+
+
 def show_deck_type_graph(edge_list, h="Headline", edge_limit=8):
 
     """
-
     :param edge_limit:
     :param h:
     :param edge_list: (node1, node2, edge_weight)
@@ -382,14 +386,16 @@ def show_deck_type_graph(edge_list, h="Headline", edge_limit=8):
     net = Network(notebook=True, width="100%", height="100%", heading=h)
     net.from_nx(G)
 
-    net.show("example.html")
+    net.show(f'{h.replace(",", "-").replace(" ", "")}.html')
 
     import webbrowser
-    webbrowser.open("example.html", new=2)
+    webbrowser.open(f'{h.replace(",", "-").replace(" ", "")}.html', new=2)
     time.sleep(3)
 
 
 if __name__ == "__main__":
+    #show_as_df(decks)
+    #exit()
     print("Running ...")
     show_as_df(decks)
     super_simple_hist(get_single_class_usage())

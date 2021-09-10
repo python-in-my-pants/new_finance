@@ -8,7 +8,33 @@ debuffs = ["aroma", "stench", "attack down", "morale down", "speed down",
 
 # TODO check if on_attack calls should not acutally be on_dmg_inflicted calls !!!
 
+# TODO quantify difference between 2 tuples of tags
+
 card_dataframe = pd.read_json("axie_card_data_w_tags.json")
+
+
+class TagGroup:
+    
+    def __init__(self, members, parent=None):
+        self.parent = parent
+        self.members = members
+        
+        
+tag_groups = (
+    {"bird", "aqua", "dawn"},
+    {"bird", "aqua", "dawn"},
+    {"plant", "reptile", "dusk"},
+    {"sleep", "fragile", "stun"},
+    {"lethal", "crit"},
+    {"stun", "fear", "disable"},
+    {"backdoor", "stench"},
+    {"chill", "last stand"},
+    {"energy gain", "energy"},
+    {"energy", "energy control"},
+    {"speed+", "speed-"},
+    {"increase shield", "heal", "on:defense", "on:shield break", "reduce damage", "attack-"},
+    {"attack+", "increase damage"}
+)
 
 
 def set_tags_in_df():
@@ -142,6 +168,73 @@ def get_cards_with_tags(tags, selection_type="and"):
                 to_ret.append(name)
 
     return card_dataframe[card_dataframe["Card name"].isin(to_ret)]
+
+
+def get_card_tags(card_name):
+    return card_dataframe[card_dataframe["Card name"] == card_name]["Tags"].values[0]
+
+
+def card_set_difference(card_set_1, card_set_2):
+    """
+    account for: dmg type, cost, shield, effects
+
+    :param card_set_1:
+    :param card_set_2:
+    :return:
+    """
+    set1_data = get_card_set_data(card_set_1)
+    set2_data = get_card_set_data(card_set_2)
+
+    plant_dmg_differece = (set2_data["dmg"] / set1_data["dmg"]) - 1
+    aqua_dmg_differece = (set2_data["dmg"] / set1_data["dmg"]) - 1
+    plant_dmg_differece = (set2_data["dmg"] / set1_data["dmg"]) - 1
+
+    shield_differece = (set2_data["shield"] / set1_data["shield"]) - 1
+
+    t1 = set1_data["tags"]
+    t2 = set2_data["tags"]
+
+    remaining_tags = 0
+    used_t2 = list()
+    found_counter = 0
+    for i, tag1 in enumerate(t1):
+        found = False
+        for j, tag2 in enumerate(t2):
+            if tag1 == tag2 and j not in used_t2:
+                used_t2.append(j)
+                found = True
+        if not found:
+            remaining_tags += 1
+        else:
+            found_counter += 1
+
+
+
+
+
+
+
+def get_card_set_data(cards):
+    group1 = ("reptile", "plant", "dusk")
+    group2 = ("aqua", "bird", "dawn")
+    group3 = ("mech", "beast", "bug")
+
+    g1, g2, g3 = 0, 0, 0
+    for card in cards:
+        if card.element in group1:
+            g1 += card.attack
+        if card.element in group2:
+            g2 += card.attack
+        if card.element in group3:
+            g3 += card.attack
+
+    return {
+        "dmg": {
+            "plant": g1, "aqua": g2, "beast": g3
+        },
+        "shield": sum([card.defense for card in cards]),
+        "tags": [get_card_tags(c.card_name) for c in cards]
+    }
 
 
 def part_name_to_card_name(part_name, part):
@@ -290,7 +383,7 @@ class ShellJab(Card):
         super().__init__(*attributes_from_df("Shell jab"))
 
     def on_attack(self, match, cards_played_this_turn, attacker, defender, atk_card) -> float:
-        if not cards_played_this_turn[defender]:
+        if not cards_played_this_turn.get(defender, []):
             return 0.3
         return 0
 
@@ -381,7 +474,7 @@ class CrimsonWater(Card):
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
         if self.owner is attacker and self is cards_played_this_turn[self.owner][0] and self.owner.hp <= self.owner.base_hp * 0.5:
-            to_focus = [axie for axie in defender.player.team if axie.hp < axie.base_hp]
+            to_focus = [axie for axie in defender.player.team if axie.alive() and axie.hp < axie.base_hp]
             return set(), to_focus
         return set(), list()
 
@@ -404,6 +497,7 @@ class TailSlap(Card):
         super().__init__(*attributes_from_df("Tail slap"))
 
     def on_damage_inflicted(self, match, cards_played_this_turn, attacker, defender, amount, atk_card):
+        # TODO this is still executed twice sometimes
         if atk_card is self and len(cards_played_this_turn[attacker]) >= 2:
             self.owner.player.gain_energy(1)
 
@@ -941,7 +1035,7 @@ class DarkSwoop(Card):
         :return:
         """
         if self is cards_played_this_turn[self.owner][0] and self.owner is attacker:
-            final_speeds = {axie: 0 for axie in cards_played_this_turn.keys()}
+            final_speeds = {axie: 0 for axie in attacker.player.team+defender.player.team}
 
             for axie, speed in [(axie, axie.speed) for axie in cards_played_this_turn.keys()]:
                 s, m = axie.buffs.on_target_select()
@@ -952,7 +1046,7 @@ class DarkSwoop(Card):
             # tODO only choose from opponents team
 
             return set(),\
-                   [sorted([c for c in flatten(cards_played_this_turn.keys()) if c.player != self.owner.player],
+                   [sorted([a for a in defender.player.team if a.alive()],
                            key=lambda axie: final_speeds[axie], reverse=True)[0]]
         return set(), list()
 
@@ -1246,7 +1340,7 @@ class TurnipRocket(Card):
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
         if self is cards_played_this_turn[self.owner][0] and self.owner is attacker:
             if len(cards_played_this_turn[self.owner]) >= 3:
-                return set(), [card for card in defender.player.team if card.element == "bird"]
+                return set(), [axie for axie in defender.player.team if axie.alive() and axie.element == "bird"]
         return set(), list()
 
 
@@ -1383,21 +1477,17 @@ class SeedBullet(Card):
         super().__init__(*attributes_from_df("Seed bullet"))
 
     def on_target_select(self, match, cards_played_this_turn, attacker, defender):
-        if self is cards_played_this_turn[self.owner][0] and self.owner is attacker:
-            final_speeds = {axie: 0 for axie in cards_played_this_turn.keys()}
+        if self.owner is attacker and self is cards_played_this_turn[self.owner][0]:
+            final_speeds = {axie: None for axie in defender.player.team if axie.alive()}
 
-            for axie, speed in [(axie, axie.speed) for axie in cards_played_this_turn.keys()]:
+            for axie, speed in [(axie, axie.speed) for axie in final_speeds.keys()]:
 
                 s, m = axie.buffs.on_target_select()
                 speed_mult = 1 + s
 
                 final_speeds[axie] = (speed * speed_mult, axie.hp, axie.morale * (1+m))
 
-            # tODO only choose from opponents team
-
-            return set(), \
-                   [sorted([c for c in flatten(cards_played_this_turn.keys()) if c.player != self.owner.player],
-                           key=lambda axie: final_speeds[axie], reverse=True)[0]]
+            return set(), [sorted(final_speeds.keys(), key=lambda axie: final_speeds[axie], reverse=True)[0]]
         return set(), list()
 
 

@@ -1,8 +1,26 @@
 from math import *
-import random, sys
-from copy import deepcopy
+from random import choice, shuffle
+import sys
+from copy import deepcopy, copy
+from typing import Dict, List
+from Utility import timeit
+from pprint import pprint as pp
 
 
+# TODO adjust for player 1 / player 2, currently mostly only coded as player 1
+
+
+def flatten(t):
+    out = []
+    for item in t:
+        if isinstance(item, (list, tuple)):
+            out.extend(flatten(item))
+        else:
+            out.append(item)
+    return out
+
+
+# abstract game state class
 class GameState:
     """ A state of the game, i.e. the game board. These are the only functions which are
         absolutely necessary to implement ISMCTS in any imperfect information game,
@@ -53,7 +71,7 @@ class GameState:
         """
         pass
 
-
+'''
 class Card:
     """ A playing card, with rank and suit.
         rank must be an integer between 2 and 14 inclusive (Jack=11, Queen=12, King=13, Ace=14)
@@ -125,7 +143,7 @@ class KnockoutWhistState(GameState):
         unseenCards = [card for card in st.GetCardDeck() if card not in seenCards]
 
         # Deal the unseen cards to the other players
-        random.shuffle(unseenCards)
+        shuffle(unseenCards)
         for p in range(1, st.numberOfPlayers + 1):
             if p != observer:
                 # Deal cards to player p
@@ -152,13 +170,13 @@ class KnockoutWhistState(GameState):
 
         # Construct a deck, shuffle it, and deal it to the players
         deck = self.GetCardDeck()
-        random.shuffle(deck)
+        shuffle(deck)
         for p in range(1, self.numberOfPlayers + 1):
             self.playerHands[p] = deck[: self.tricksInRound]
             deck = deck[self.tricksInRound:]
 
         # Choose the trump suit for this round
-        self.trumpSuit = random.choice(['C', 'D', 'H', 'S'])
+        self.trumpSuit = choice(['C', 'D', 'H', 'S'])
 
     def GetNextPlayer(self, p):
         """ Return the player to the left of the specified player, skipping players who have been knocked out
@@ -188,8 +206,7 @@ class KnockoutWhistState(GameState):
             (leader, leadCard) = self.currentTrick[0]
             suitedPlays = [(player, card.rank) for (player, card) in self.currentTrick if card.suit == leadCard.suit]
             trumpPlays = [(player, card.rank) for (player, card) in self.currentTrick if card.suit == self.trumpSuit]
-            sortedPlays = sorted(suitedPlays, key=lambda player, rank: rank) + sorted(trumpPlays,
-                                                                                        key=lambda player, rank: rank)
+            sortedPlays = sorted(suitedPlays, key=lambda x: [1]) + sorted(trumpPlays, key=lambda x: x[1])
             # The winning play is the last element in sortedPlays
             trickWinner = sortedPlays[-1][0]
 
@@ -244,6 +261,129 @@ class KnockoutWhistState(GameState):
         result += ",".join(("%i:%s" % (player, card)) for (player, card) in self.currentTrick)
         result += "]"
         return result
+'''
+
+
+class AxieGameState:
+    """ A state of the game, i.e. the game board. These are the only functions which are
+        absolutely necessary to implement ISMCTS in any imperfect information game,
+        although they could be enhanced and made quicker, for example by using a
+        GetRandomMove() function to generate a random move during rollout.
+        By convention the players are numbered 1, 2, ..., self.numberOfPlayers.
+    """
+
+    def __init__(self, s):
+        self.numberOfPlayers = 2
+        self.playerToMove = 1  # 1 = me; 2 = opp
+        self.state = s
+
+    def GetNextPlayer(self, p):
+        """ Return the player to the left of the specified player
+        """
+        return (p % self.numberOfPlayers) + 1
+
+    def Clone(self):
+        """ Create a deep clone of this game state.
+        """
+        st = AxieGameState(deepcopy(self.state))
+        st.playerToMove = self.playerToMove
+        return st
+
+    def CloneAndRandomize(self, observer: int):
+        """
+        Create a deep clone of this game state,
+        randomizing any information not visible to the specified observer player.
+        """
+        clone = self.Clone()  # beware: clone contains reference to MCTS agent as agents are part of game state
+
+        if observer == 1:
+            opp = clone.state.player2
+        else:
+            opp = clone.state.player1
+
+        # shuffle opponent hand into deck and let him draw new
+        old_opp_hand = flatten(opp.hand.values())
+        opp.deck_pile += old_opp_hand
+        opp.hand = {axie: [] for axie in opp.team if axie.alive()}
+        opp.draw_cards(len(old_opp_hand))
+
+        return clone
+
+    def DoMove(self, move: Dict):
+        """
+        Update a state by carrying out the given move.
+        Must update playerToMove.
+
+        we must reorder things here, start with applying moves, then check if game is over; if not start new turn,
+        distribute energy, draw, etc.
+
+        """
+
+        cards_p1 = move
+        cards_p2 = self.state.player2.new_random_select()  # automatically uses random if no agent supplied
+
+        copy(cards_p1).update(cards_p2)
+
+        self.state.fight(cards_p1)
+
+        for axie in self.state.player1.team + self.state.player2.team:
+            if axie.alive():
+                axie.shield_broke_this_turn = False
+
+        self.state.round += 1
+
+        # -------------------------------------------------------------
+
+        self.playerToMove = self.GetNextPlayer(self.playerToMove)
+
+        # ------------------------------------------------------------
+
+        if self.state.game_running():
+
+            # start next turn
+            if self.state.round >= 10:
+                for axie in self.state.player1.team + self.state.player2.team:
+                    if axie.alive():
+                        axie.change_hp(-((self.state.round - 10) * 30 + 20))
+
+                if not self.state.game_running():
+                    return
+
+            # reset shield to 0, remove buffs/debuffs/poison, draw cards
+            self.state.player1.start_turn(self.state.cards_per_round if self.state.round > 1 else self.state.start_hand,
+                                          self.state.energy_per_turn if self.state.round > 1 else 0)
+            self.state.player2.start_turn(self.state.cards_per_round if self.state.round > 1 else self.state.start_hand,
+                                          self.state.energy_per_turn if self.state.round > 1 else 0)
+
+    def GetMoves(self):
+        """ Get all possible moves from this state.
+        """
+
+        if self.playerToMove == 1:  # AIs turn
+            if not self.state.game_running():
+                return []  # [{axie: [] for axie in self.state.player1.team}]
+            return self.state.player1.get_all_possible_moves()
+        else:
+            if not self.state.game_running():
+                return []  # [{axie: [] for axie in self.state.player2.team}]
+            return self.state.player2.get_all_possible_moves()
+
+    def GetResult(self, player: int):
+        """ Get the game result from the viewpoint of player.
+        """
+        if not self.state.game_running():
+            r = self.state.get_result()
+            if player == 1:
+                return r
+            else:
+                return -r
+
+        """for axie in self.state.player1.team+self.state.player2.team:
+            print(axie.long())
+
+        print(len(self.state.player1.get_all_possible_moves()+self.state.player2.get_all_possible_moves()))"""
+
+        raise RuntimeError("Trying to get result of non-terminal state")
 
 
 class Node:
@@ -297,7 +437,8 @@ class Node:
         return n
 
     def Update(self, terminalState):
-        """ Update this node - increment the visit count by one, and increase the win count by the result of terminalState for self.playerJustMoved.
+        """ Update this node -
+        increment the visit count by one, and increase the win count by the result of terminalState for self.playerJustMoved.
         """
         self.visits += 1
         if self.playerJustMoved is not None:
@@ -327,10 +468,13 @@ class Node:
         return s
 
 
-def ISMCTS(rootstate, itermax, verbose=False):
+def ISMCTS(rootstate: AxieGameState, itermax=1000, verbose=False):
     """ Conduct an ISMCTS search for itermax iterations starting from rootstate.
         Return the best move from the rootstate.
     """
+
+    # TODO beware to differ between [] as turn = no legal moves = game over AND
+    #  [{axie: [] for axie in...}] = pass = game running
 
     rootnode = Node()
 
@@ -338,47 +482,74 @@ def ISMCTS(rootstate, itermax, verbose=False):
         node = rootnode
 
         # Determinize
-        state = rootstate.CloneAndRandomize(rootstate.playerToMove)
+        axie_game_state = rootstate.CloneAndRandomize(rootstate.playerToMove)
 
         # Select
-        while state.GetMoves() != [] and node.GetUntriedMoves(
-                state.GetMoves()) == []:  # node is fully expanded and non-terminal
-            node = node.UCBSelectChild(state.GetMoves())
-            state.DoMove(node.move)
+        possible_moves = axie_game_state.GetMoves()
+        while possible_moves != [] and node.GetUntriedMoves(possible_moves) == []:  # node is fully expanded and non-terminal
+            #print("ISMCTS: selecting")
+            node = node.UCBSelectChild(possible_moves)
+            axie_game_state.DoMove(node.move)
+            possible_moves = axie_game_state.GetMoves()
 
         # Expand
-        untriedMoves = node.GetUntriedMoves(state.GetMoves())
-        if untriedMoves != []:  # if we can expand (i.e. state/node is non-terminal)
-            m = random.choice(untriedMoves)
-            player = state.playerToMove
-            state.DoMove(m)
+        untriedMoves = node.GetUntriedMoves(possible_moves)
+        if untriedMoves:  # if we can expand (i.e. state/node is non-terminal)
+            m = choice(untriedMoves)
+            #print("ISMCTS: expanding with move:")
+            #pp(m)
+            player = axie_game_state.playerToMove
+            axie_game_state.DoMove(m)
             node = node.AddChild(m, player)  # add child and descend tree
 
         # Simulate
-        while state.GetMoves() != []:  # while state is non-terminal
-            state.DoMove(random.choice(state.GetMoves()))
+        possible_moves = axie_game_state.GetMoves()
+        while possible_moves:  # while state is non-terminal
+            #print("ISMCTS: simulating")
+            axie_game_state.DoMove(choice(possible_moves))
+            possible_moves = axie_game_state.GetMoves()
 
         # Backpropagate
-        while node != None:  # backpropagate from the expanded node and work back to the root node
-            node.Update(state)
+        while node is not None:  # backpropagate from the expanded node and work back to the root node
+            #print("ISMTS: backpropagating")
+            node.Update(axie_game_state)
             node = node.parentNode
 
-    # Output some information about the tree - can be omitted
+    """# Output some information about the tree - can be omitted
     if verbose:
         print(rootnode.TreeToString(0))
     else:
-        print(rootnode.ChildrenToString())
+        print(rootnode.ChildrenToString())"""
 
-    return max(rootnode.childNodes, key=lambda c: c.visits).move  # return the move that was most visited
+    selected_move = max(rootnode.childNodes, key=lambda c: c.visits).move  # return the move that was most visited
+
+    # selected move needs to be transformed back to reference actual game axies / cards instead of clones
+    def clone_to_real_axie(c):
+        return [axie for axie in rootstate.state.player1.team if axie.axie_id == c.axie_id][0]
+
+    def clone_to_real_card(c):
+        try:
+            orig_hand_cards = flatten(list(rootstate.state.player1.hand.values()))
+            return [card for card in orig_hand_cards if card.card_id == c.card_id][0]
+        except IndexError:
+            raise RuntimeError("Clone mapping of card failed")
+        # use cards in hand to actually get the copy in hand and not elsewhere
+
+    uncloned_move = {
+        clone_to_real_axie(axie): [clone_to_real_card(card) for card in selected_move[axie]]
+        for axie in selected_move.keys()
+    }
+
+    return uncloned_move
 
 
 def PlayGame():
     """ Play a sample game between two ISMCTS players.
     """
-    state = KnockoutWhistState(4)
+    state = AxieGameState()
 
     while state.GetMoves():
-        print(str(state))
+        #print(str(state))
         # Use different numbers of iterations (simulations, tree nodes) for different players
         if state.playerToMove == 1:
             m = ISMCTS(rootstate=state, itermax=1000, verbose=False)
