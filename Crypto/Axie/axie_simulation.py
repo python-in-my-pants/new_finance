@@ -153,7 +153,7 @@ def plot_action_width():
 
 def plot_deck_stats_test():
 
-    p = Player.from_team_ids([4358428, 2949043, 4557896])
+    p = Player.from_team_ids([5568323, 2949043, 4488784])  #4358428
     # p = Player.from_team_ids([1386868, 2949043, 4759059])
 
     for xe in p.team:
@@ -379,6 +379,4 @@ def top_ladder_decks_test():
 
 
 if __name__ == "__main__":
-    human_fight_test([Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap()),
-                      Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap()),
-                      Axie("dusk", AquaVitality(), AngryLam(), AirForceOne(), TailSlap())])
+    plot_deck_stats_test()

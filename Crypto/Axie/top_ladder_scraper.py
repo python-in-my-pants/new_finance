@@ -222,6 +222,14 @@ def get_top_100_decks(use_cached=True, limit=100):
 decks = get_top_100_decks(use_cached=True, limit=100)
 
 
+def only_show_as_df(deck_list):
+    full_decks = [deck for deck in deck_list if deck]
+    ind = [(f'Deck #{n + 1}', k) for n in range(len(full_decks)) for k in range(1, 4)]
+    multi_ind = pd.MultiIndex.from_tuples(ind, names=["Deck", "Axie"])
+    df = pd.DataFrame.from_records([axie.to_dict() for axie in flatten(full_decks)], index=multi_ind)
+    print(df)
+
+
 def show_as_df(deck_list):
     try:
         with open("leaderboard_teams_df.pickle", "rb") as file:
@@ -361,8 +369,53 @@ def get_best_card_combs(axies):
     return r
 
 
-def get_decks_with_axies_with_cards(cards):
-    return ...
+def get_decks_with_axies_with_cards(card_sets):
+    """
+    :param card_sets: {{mouth: ..., back: ...}, axie2: ...}
+    :return:
+    """
+    from collections import OrderedDict
+
+    good_matches = 0
+    to_ret = []
+
+    def card_set_id(s):
+        return ''.join([f'{k}:{v}' for k, v in OrderedDict(sorted(s.items())).items()])
+
+    for deck in decks:
+
+        good_matches = 0
+        hit_sets = set()
+
+        for axie in deck:
+            bad_match = False
+            axie_is_hit = False
+
+            for card_set in card_sets:
+
+                if axie_is_hit or card_set_id(card_set) in hit_sets:
+                    continue
+
+                for part_type, value in card_set.items():
+                    value = value.lower()
+                    if bad_match:
+                        continue
+
+                    if (part_type == "back" and value not in axie.back.part_name.lower()) \
+                            or (part_type == "mouth" and value not in axie.mouth.part_name.lower()) \
+                            or (part_type == "horn" and value not in axie.horn.part_name.lower()) \
+                            or (part_type == "tail" and value not in axie.tail.part_name.lower()):
+                        bad_match = True
+
+                if not bad_match:
+                    good_matches += 1
+                    hit_sets.add(card_set_id(card_set))
+                    axie_is_hit = True
+
+        if good_matches >= len(card_sets):
+            to_ret.append(deck)
+
+    return to_ret
 
 
 def show_deck_type_graph(edge_list, h="Headline", edge_limit=8):
@@ -394,15 +447,20 @@ def show_deck_type_graph(edge_list, h="Headline", edge_limit=8):
 
 
 if __name__ == "__main__":
-    #show_as_df(decks)
-    #exit()
+    """
+    anemone_decks = get_decks_with_axies_with_cards((
+        #{"back": "anemone", "horn": "anemone", "mouth": "lam", "tail": "nimo"},
+        {"back": "sponge", "tail": "nimo"},
+    ))
+    only_show_as_df(anemone_decks)
+    exit()"""
     print("Running ...")
     show_as_df(decks)
     super_simple_hist(get_single_class_usage())
     best_deck_combs = super_simple_hist(get_deck_combos())
 
-    print("\nBest comb:", best_deck_combs[0], "\n")
-    get_part_distribution(flatten(get_decks_with_composition(best_deck_combs[0])))
+    print("\nBest comb:", best_deck_combs[1], "\n")
+    get_part_distribution(flatten(get_decks_with_composition(best_deck_combs[1])))
 
     best_card_combs = get_best_card_combs(flatten(get_decks_with_composition(best_deck_combs[0])))
     best_card_combs2 = get_best_card_combs(flatten(get_decks_with_composition(best_deck_combs[1])))

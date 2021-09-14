@@ -1,6 +1,7 @@
 from typing import Tuple
 import pickle
 import pandas as pd
+from copy import copy
 from Axie.Axie_models import Card, flatten
 
 debuffs = ["aroma", "stench", "attack down", "morale down", "speed down",
@@ -185,33 +186,70 @@ def card_set_difference(card_set_1, card_set_2):
     set1_data = get_card_set_data(card_set_1)
     set2_data = get_card_set_data(card_set_2)
 
-    plant_dmg_differece = (set2_data["dmg"] / set1_data["dmg"]) - 1
-    aqua_dmg_differece = (set2_data["dmg"] / set1_data["dmg"]) - 1
-    plant_dmg_differece = (set2_data["dmg"] / set1_data["dmg"]) - 1
+    plant_dmg_differece = (set2_data["dmg"]["plant"] / set1_data["dmg"]["plant"]) - 1
+    beast_dmg_differece = (set2_data["dmg"]["beast"] / set1_data["dmg"]["beast"]) - 1
+    aqua_dmg_differece = (set2_data["dmg"]["aqua"] / set1_data["dmg"]["aqua"]) - 1
 
     shield_differece = (set2_data["shield"] / set1_data["shield"]) - 1
 
-    t1 = set1_data["tags"]
-    t2 = set2_data["tags"]
+    tag_differecne = get_tag_difference(set1_data["tags"], set2_data["tags"])
 
-    remaining_tags = 0
-    used_t2 = list()
-    found_counter = 0
-    for i, tag1 in enumerate(t1):
-        found = False
-        for j, tag2 in enumerate(t2):
-            if tag1 == tag2 and j not in used_t2:
-                used_t2.append(j)
-                found = True
-        if not found:
-            remaining_tags += 1
-        else:
-            found_counter += 1
+    return {
+        "plant": plant_dmg_differece,
+        "beast": beast_dmg_differece,
+        "aqua": aqua_dmg_differece,
+        "shield": shield_differece,
+        "tag": tag_differecne,
+        "difference": (abs(plant_dmg_differece)+abs(beast_dmg_differece)+abs(aqua_dmg_differece)+
+                       abs(shield_differece)+abs(tag_differecne)) / 5
+    }
 
 
+def get_tag_difference(t1, t2, not_found_penality=2):
 
+    """
+    quantify the difference between 2 lists of tags using tag groups as distance (same tag = 0, same group = 1, else 2)
 
+    this is just a very crude implementation, the problem is actually not that trivial
 
+    :param t1:
+    :param t2:
+    :return: value between 0 and 1 where 1 means no match from t1 in t2 found and 0 means an exact match plus potential
+        additional elements in t2
+    """
+
+    def tag_groups_with_tag(t):
+        """
+        list of tag groups including the given tag with given tag removed respectively
+        :param t:
+        :return:
+        """
+        return [g-{t} for g in tag_groups if t in g]
+
+    t1_copy = copy(t1)
+    t2_copy = copy(t2)
+    distance = 0
+
+    # exact matches
+    for tag1 in t1:
+        if tag1 in t2_copy:
+            t2_copy.remove(tag1)
+            t1_copy.remove(tag1)
+
+    # same tag group
+    for tag1 in t1_copy:
+        group = tag_groups_with_tag(tag1)
+        matched = False
+        for elem in group:
+            if elem in t2_copy:
+                matched = True
+                distance += 1
+                t2_copy.remove(elem)
+                break
+        if not matched:
+            distance += not_found_penality
+
+    return distance / (not_found_penality * len(t1))
 
 
 def get_card_set_data(cards):
@@ -1889,4 +1927,4 @@ if __name__ == "__main__":
     pd.set_option('display.max_colwidth', 500)
     pd.set_option('display.float_format', lambda x: '%.2f' % x)
 
-    print(get_cards_with_tags(["heal"]))
+    print(get_cards_with_tags(["backdoor"]))
