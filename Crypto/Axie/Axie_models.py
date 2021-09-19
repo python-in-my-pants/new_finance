@@ -278,7 +278,6 @@ class Card(ABC):
 
 
 class Axie:
-    hp_multi = 8.39
 
     @staticmethod
     def get_genetically_complete_pop(n=1):
@@ -475,7 +474,7 @@ class Axie:
             bm += pm + em
 
         # if axie is idle and not in battle, element stats + card stats included
-        self.base_hp = int(bhp * self.hp_multi)
+        self.base_hp = int(bhp * 6 + 150)
         self.base_morale = bm
         self.base_speed = bsp
         self.base_skill = bsk

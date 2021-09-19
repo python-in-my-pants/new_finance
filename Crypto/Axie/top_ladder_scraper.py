@@ -447,13 +447,15 @@ def show_deck_type_graph(edge_list, h="Headline", edge_limit=8):
 
 
 if __name__ == "__main__":
-    """
+
     anemone_decks = get_decks_with_axies_with_cards((
         #{"back": "anemone", "horn": "anemone", "mouth": "lam", "tail": "nimo"},
-        {"back": "sponge", "tail": "nimo"},
+        #{"back": "sponge", "tail": "nimo"},
+        {"tail": "iguana", "back": "sail"},
     ))
     only_show_as_df(anemone_decks)
-    exit()"""
+    exit()
+
     print("Running ...")
     show_as_df(decks)
     super_simple_hist(get_single_class_usage())
