@@ -102,7 +102,7 @@ def select_optimal_parents(target_build: AxieBuild, max_children: (0, 0)):
     # query market listings for all desirable and acceptable genes
 
 
-def simple_parent_selection(target_build):
+def simple_parent_selection(target_build, slp_price=0.06, axs_price=55):
     """
     {
         "classes": ["dusk"],
@@ -123,7 +123,7 @@ def simple_parent_selection(target_build):
     :return:
     """
     orig_target_build = deepcopy(target_build)
-    breeding_cost_for_4_children_from_2_virgins = 800
+    breeding_cost_for_4_children_from_2_virgins = 3300 * slp_price + 8 * axs_price
 
     target_build.update({"breedCount": 0})
 
@@ -172,6 +172,7 @@ def simple_parent_selection(target_build):
         profit = min_child_value*4 - parent_value_decrease + parent_investment - breeding_cost_for_4_children_from_2_virgins
 
         print(f'\n'
+              f'        Breeding cost: {breeding_cost_for_4_children_from_2_virgins}\n'
               f'      Min child value: {min_child_value: >4.2f}\n'
               f'      Cum child value: {min_child_value*4: >4.2f}\n'
               f'    Parent investment: {parent_investment: >4.2f}\n'
@@ -180,7 +181,8 @@ def simple_parent_selection(target_build):
               f'\n'
               f'       Cum investment: {cum_invest: >4.2f}\n'
               f'                 Gain: {min_child_value*4: >4.2f}\n'
-              f'               Profit: {profit: >4.2f}\n')
+              f'               Profit: {profit: >4.2f}\n'
+              f'                  ROI: {100 * profit / cum_invest:.2f} %')
 
     return parent_evaluation
 
@@ -374,4 +376,4 @@ if __name__ == "__main__":
     from AxieBuild import builds
 
     # manual_parent_selection_helper()
-    simple_parent_selection(builds.backdoor_bird)
+    simple_parent_selection(builds.double_anemone)
