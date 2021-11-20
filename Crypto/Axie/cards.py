@@ -253,6 +253,11 @@ def get_tag_difference(t1, t2, not_found_penality=2):
 
 
 def get_card_set_data(cards):
+    """
+
+    :param cards: damage per class type, cumulative shield, tags
+    :return:
+    """
     group1 = ("reptile", "plant", "dusk")
     group2 = ("aqua", "bird", "dawn")
     group3 = ("mech", "beast", "bug")

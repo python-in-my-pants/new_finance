@@ -102,10 +102,121 @@ builds = DDict({
         "parts": {
             "back": ["anemone"],
             "mouth": ["catfish", "zigzag", "mosquito"],
-            "tail": ["koi", "post fight", "nimo", "snake jar"],
+            "tail": ["koi", "post fight", "nimo", "snake jar", "wall gecko"],
             "horn": ["anemone"]
         },
-        "genes": {"printer": 0},
-    }
+        "genes": {"printer": 1},
+    },
+    "damage_reflector": {
+        "classes": ["reptile"],
+        "parts": {
+            "back": ["indian star"],
+            "mouth": ["tiny turtle", "kotaro"],
+            "tail": ["wall gecko", "snake jar"],
+            "horn": ["scaly spoon"]
+        },
+        "hp": [50, 61],
+        "genes": {"printer": 2},
+    },
 
+    "control_beast": {
+        "classes": ["beast"],
+        "parts": {
+            "back": ["risky beast", "jaguar"],
+            "mouth": ["goda"],
+            "tail": ["rice", "cottontail"],
+            "horn": ["dual blade", "pliers", "pocky", "little branch"]
+        },
+        "speed": [43, 61],
+        "genes": {"printer": 2},
+    },
+    "damage_beast": {
+        "classes": ["beast"],
+        "parts": {
+            "back": ["risky beast", "jaguar"],
+            "mouth": ["nut cracker"],
+            "tail": ["nut throw"],
+            "horn": ["dual blade", "pliers", "pocky", "little branch"]
+        },
+        "speed": [43, 61],
+        "genes": {"printer": 2},
+    },
+    "rimp_beast": {
+        "classes": ["beast"],
+        "parts": {
+            "back": ["ronin"],
+            "mouth": ["nut cracker"],
+            "tail": ["nut throw"],
+            "horn": ["imp"]
+        },
+        "speed": [43, 61],
+        "genes": {"printer": 2},
+    },
+    "rimp_control_beast": {
+        "classes": ["beast"],
+        "parts": {
+            "back": ["ronin"],
+            "mouth": ["goda"],
+            "tail": ["rice", "cottontail"],
+            "horn": ["imp"]
+        },
+        "speed": [43, 61],
+        "genes": {"printer": 2},
+    },
+
+    "terminator": {
+        "classes": ["reptile", "dusk"],
+        "parts": {
+            "back": ["snail shell"],
+            "mouth": ["tiny turtle"],
+            "tail": ["thorny caterpillar"],
+            "horn": ["lagging"]
+        },
+        "speed": [43, 61],
+        "genes": {"printer": 2},
+    },
+    "dusk_terminator": {
+        "classes": ["dusk"],
+        "parts": {
+            "back": ["snail shell"],
+            "mouth": ["tiny turtle"],
+            "tail": ["thorny caterpillar"],
+            "horn": ["lagging"]
+        },
+        "speed": [43, 61],
+        "genes": {"printer": 2},
+    },
+    "max_speed_dusk_terminator": {
+        "classes": ["dusk"],
+        "parts": {
+            "back": ["snail shell"],
+            "mouth": ["tiny turtle"],
+            "tail": ["thorny caterpillar"],
+            "horn": ["lagging"]
+        },
+        "speed": [46, 61],
+        "genes": {"printer": 2},
+    },
+
+    "kamikaze_bird": {
+        "classes": ["bird"],
+        "parts": {
+            "back": ["perch", "tri spikes"],
+            "mouth": ["axie kiss"],
+            "tail": ["post fight"],
+            "horn": ["dual blade"]
+        },
+        "genes": {"printer": 1},
+        "speed": [59, 61]
+    },
+    "kamikaze_beast": {
+        "parts": {
+            "back": ["perch", "ronin", "tri spikes", "risky beast", "jaguar", "pigeon post"],
+            "mouth": ["axie kiss"],
+            "tail": ["post fight"],
+            "horn": ["dual blade"]
+        },
+        "genes": {"printer": 1},
+        "speed": [43, 61]
+    },
 })
